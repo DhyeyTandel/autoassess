@@ -1,0 +1,74 @@
+# =============================================================================
+# AutoAssess — .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+.Python
+
+# --- Virtual environments (uv) ---
+.venv/
+.uv/
+venv/
+env/
+
+# --- Data (all data is gitignored; share via DVC or external storage) ---
+data/raw/
+data/interim/
+data/processed/
+
+# --- Experiment runs (weights, logs) ---
+runs/
+# Keep the runs/ directory itself
+!runs/.gitkeep
+
+# --- Model weights ---
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.weights
+
+# --- Jupyter / notebook artefacts ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- IDE ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# --- Environment / secrets ---
+.env
+.env.*
+*.key
+
+# --- Ruff / mypy / pytest caches ---
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- OS ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Misc ---
+*.log
+*.tmp
+*.bak
+*.swp

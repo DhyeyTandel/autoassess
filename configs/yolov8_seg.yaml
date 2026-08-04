@@ -1,0 +1,25 @@
+# =============================================================================
+# configs/yolov8_seg.yaml — YOLOv8 segmentation experiment config
+# Inherits / extends base.yaml values; override only what differs.
+# =============================================================================
+
+# Load base config in code: cfg = OmegaConf.merge(base, this_file)
+
+project:
+  experiment: "yolov8_seg_v1"
+
+model:
+  architecture: "yolov8"
+  variant:      "yolov8n-seg"    # swap to yolov8s-seg if VRAM allows
+  pretrained:   true
+
+train:
+  epochs:  50
+  batch:   8
+  amp:     true
+  lr0:     0.001
+
+augmentation:
+  mosaic:  1.0
+  mixup:   0.0
+  fliplr:  0.5
