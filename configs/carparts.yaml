@@ -1,0 +1,94 @@
+# =============================================================================
+# configs/carparts.yaml — Vehicle part segmentation dataset config
+#
+# Source dataset: Ultralytics Carparts-Seg (23 classes, YOLOv8-seg format,
+# auto-downloaded by Ultralytics from
+# https://github.com/ultralytics/assets/releases/download/v0.0.0/carparts-seg.zip
+# — see https://docs.ultralytics.com/datasets/segment/carparts-seg/).
+#
+# `raw_names` is that dataset's own 23-class list, in its own id order —
+# this is what `autoassess.data.carparts` asserts the downloaded dataset's
+# label files actually use, the same way `configs/cardd.yaml` asserts
+# against the source COCO categories.
+#
+# `panel_groups` collapses those 23 raw classes down to the coarse panel
+# taxonomy this project actually reasons about for damage association
+# (`names`, below) — several raw classes legitimately merge into one panel
+# (e.g. front_left_door + front_right_door + front_door -> door). Classes
+# with no corresponding coarse panel are dropped rather than mapped
+# somewhere approximate: the "object" catch-all, mirrors, wheel, trunk,
+# tailgate, all back_light variants (tail lights are not headlamps), and
+# back_glass (the rear window is not the windshield — merging them would
+# mislabel rear-window damage as "windshield damage").
+#
+# Known gap: the source dataset has no fender/quarter-panel class, so
+# "fender" is not one of the panels this project can segment or associate
+# damage to. See autoassess/data/carparts.py module docstring.
+# =============================================================================
+
+path: ../data/processed/carparts   # relative to this file's location; resolved at runtime
+train: images/train
+val: images/val
+test: images/test
+
+# Coarse panel taxonomy this project associates damage instances against.
+# 0-indexed, in the order the parts model's YOLO class index will use.
+names:
+  0: bonnet
+  1: front_bumper
+  2: rear_bumper
+  3: door
+  4: headlamp
+  5: windshield
+
+# The source Carparts-Seg dataset's own 23 classes, in its own id order —
+# used only to validate the downloaded dataset before remapping (see
+# assert_raw_categories_match in autoassess/data/carparts.py).
+raw_names:
+  0: back_bumper
+  1: back_door
+  2: back_glass
+  3: back_left_door
+  4: back_left_light
+  5: back_light
+  6: back_right_door
+  7: back_right_light
+  8: front_bumper
+  9: front_door
+  10: front_glass
+  11: front_left_door
+  12: front_left_light
+  13: front_light
+  14: front_right_door
+  15: front_right_light
+  16: hood
+  17: left_mirror
+  18: object
+  19: right_mirror
+  20: tailgate
+  21: trunk
+  22: wheel
+
+# raw class name -> coarse panel name. Any raw class not listed here
+# (mirrors, wheel, tailgate, trunk, "object") is dropped: it has no
+# corresponding coarse panel and instances of that class are excluded
+# from the remapped dataset entirely, not merged into an unrelated panel.
+panel_groups:
+  hood: bonnet
+  front_bumper: front_bumper
+  back_bumper: rear_bumper
+  front_door: door
+  front_left_door: door
+  front_right_door: door
+  back_door: door
+  back_left_door: door
+  back_right_door: door
+  front_light: headlamp
+  front_left_light: headlamp
+  front_right_light: headlamp
+  front_glass: windshield
+  # back_glass (rear window) is intentionally NOT mapped to windshield — it is a
+  # different panel and merging them would mislabel rear-window damage as
+  # "windshield damage" in the output JSON. It is dropped, same as mirrors/wheel/
+  # trunk/tailgate/back_light: excluded from the remapped dataset, not merged
+  # into an unrelated panel.

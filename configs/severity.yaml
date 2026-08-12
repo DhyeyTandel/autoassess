@@ -1,0 +1,60 @@
+# =============================================================================
+# configs/severity.yaml — Heuristic severity-grading parameters
+#
+# Consumed by src/autoassess/models/severity.py. Every number that drives the
+# heuristic score lives here, not in code, so the grading policy can be
+# retuned (e.g. against real adjuster labels) without touching source.
+# =============================================================================
+
+# Per-class severity weight, applied to each instance's mask-area contribution
+# before summing. Reflects that a given area of glass shatter or a structural
+# crack is a worse claim than the same area of a cosmetic scratch — these are
+# priors, not fitted to data (see severity.py module docstring for the
+# reasoning and the circularity caveat that applies once any downstream model
+# is trained on labels derived from this heuristic).
+class_weights:
+  dent: 1.0
+  scratch: 0.6
+  crack: 1.6
+  glass_shatter: 1.8
+  lamp_broken: 1.3
+  tire_flat: 1.4
+
+# The "vehicle region" denominator is not a real vehicle detection — CarDD has
+# no vehicle bounding box annotation. It is approximated as the union of all
+# detected damage-instance boxes in the image, padded outward by this
+# fraction on each side, on the assumption that damage is roughly centered on
+# the vehicle body and the vehicle extends somewhat beyond the damage extent.
+# This under-estimates the true vehicle area for a single small, off-center
+# defect (inflating the area fraction) and over-estimates it when damage is
+# already spread across most of the frame — see severity.py docstring.
+vehicle_region_padding: 0.4
+
+# Weighted-area-fraction thresholds bucketing a continuous score into a
+# discrete label. score = sum(class_weight_i * mask_area_i) / vehicle_region_area.
+# minor:    score <  minor_max
+# moderate: minor_max <= score < moderate_max
+# severe:   score >= moderate_max
+thresholds:
+  minor_max: 0.08
+  moderate_max: 0.25
+
+labels:
+  - minor
+  - moderate
+  - severe
+
+# Triage policy, consumed by src/autoassess/infer/pipeline.py. Applied over
+# the whole image's set of per-instance severity grades (see pipeline.py
+# module docstring for the exact decision rule and why it's a heuristic,
+# same circularity caveat as the severity grades it's built on):
+#
+#   auto_approve:      every instance graded "minor" AND total damaged mask
+#                       area (px, summed across instances) is below
+#                       auto_approve_max_total_area_px
+#   total_loss_review:  any instance graded "severe" OR total damaged mask
+#                       area exceeds total_loss_min_total_area_px
+#   human_review:       everything else (the default, safe fallback)
+triage:
+  auto_approve_max_total_area_px: 15000
+  total_loss_min_total_area_px: 300000

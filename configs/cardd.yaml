@@ -1,0 +1,42 @@
+# =============================================================================
+# configs/cardd.yaml — Ultralytics dataset YAML for CarDD (YOLOv8-seg format)
+#
+# This file is the single source of truth for class ordering. The COCO ->
+# YOLO converter (src/autoassess/data/convert.py) asserts the source COCO
+# `categories` list matches `names` here (same names, same count, same id
+# ordering) before doing any conversion — the YOLO class index for every
+# label is derived from this list's order, never from JSON enumeration
+# order, since COCO does not guarantee categories are listed in id order.
+# =============================================================================
+
+path: ../data/processed/cardd     # relative to this file's location; resolved at runtime
+train: images/train
+val: images/val
+test: images/test
+
+# id -> name, in the exact order expected in the source COCO `categories` list
+# (COCO category ids are 1-indexed; YOLO class indices below are 0-indexed
+# in list position, i.e. names[0] == "dent" is YOLO class 0).
+names:
+  0: dent
+  1: scratch
+  2: crack
+  3: glass shatter
+  4: lamp broken
+  5: tire flat
+
+# Original CarDD COCO category ids these names must map to (id ordering
+# asserted against, not just names/count) — see convert.py:EXPECTED_CATEGORIES.
+coco_category_ids:
+  dent: 1
+  scratch: 2
+  crack: 3
+  glass shatter: 4
+  lamp broken: 5
+  tire flat: 6
+
+# Classes considered rare for stratified splitting / sampling purposes.
+rare_classes:
+  - "glass shatter"
+  - "lamp broken"
+  - "tire flat"

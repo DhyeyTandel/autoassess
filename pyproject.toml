@@ -33,6 +33,9 @@ dependencies = [
     # image handling
     "Pillow>=10.3.0",
     "numpy>=1.26.0",
+    "pycocotools>=2.0.11",
+    # demo UI
+    "gradio>=4.44.0",
 ]
 
 [project.optional-dependencies]
@@ -46,10 +49,22 @@ dev = [
 ]
 
 [project.scripts]
-autoassess-train  = "autoassess.train.train:main"
-autoassess-eval   = "autoassess.eval.evaluate:main"
-autoassess-infer  = "autoassess.infer.infer:main"
-autoassess-prep   = "autoassess.data.prepare:main"
+autoassess-train          = "autoassess.train.train:main"
+autoassess-train-yolo     = "autoassess.train.train_yolo:main"
+autoassess-train-maskrcnn = "autoassess.train.train_maskrcnn:main"
+autoassess-train-severity = "autoassess.train.train_severity:main"
+autoassess-eval           = "autoassess.eval.evaluate:main"
+autoassess-compare        = "autoassess.eval.compare:main"
+autoassess-severity-eval  = "autoassess.eval.severity_eval:main"
+autoassess-infer          = "autoassess.infer.infer:main"
+autoassess-prep           = "autoassess.data.prepare:main"
+autoassess-convert        = "autoassess.data.convert:main"
+autoassess-verify         = "autoassess.data.verify:main"
+autoassess-carparts       = "autoassess.data.carparts:main"
+autoassess-train-parts    = "autoassess.train.train_parts:main"
+autoassess-associate      = "autoassess.infer.associate:main"
+autoassess-pipeline       = "autoassess.infer.pipeline:main"
+autoassess-report         = "autoassess.eval.report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autoassess"]

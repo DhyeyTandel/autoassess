@@ -72,3 +72,6 @@ Desktop.ini
 *.tmp
 *.bak
 *.swp
+
+# --- Downloaded reference archives ---
+*.zip
