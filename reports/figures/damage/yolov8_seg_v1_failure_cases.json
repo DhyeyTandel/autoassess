@@ -1,0 +1,114 @@
+{
+  "worst_scoreable": [
+    {
+      "file_name": "000404.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 3,
+      "n_dt": 2,
+      "n_matched": 0,
+      "predicted_classes": [
+        "lamp broken",
+        "dent"
+      ]
+    },
+    {
+      "file_name": "000550.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 3,
+      "n_dt": 3,
+      "n_matched": 0,
+      "predicted_classes": [
+        "crack",
+        "crack",
+        "crack"
+      ]
+    },
+    {
+      "file_name": "000687.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 4,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch",
+        "scratch",
+        "scratch",
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "000856.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 2,
+      "n_dt": 2,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch",
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "000886.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "000950.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 2,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "001169.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 4,
+      "n_dt": 2,
+      "n_matched": 0,
+      "predicted_classes": [
+        "dent",
+        "dent"
+      ]
+    },
+    {
+      "file_name": "001180.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 3,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch",
+        "scratch",
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "001259.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 2,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "lamp broken"
+      ]
+    },
+    {
+      "file_name": "001367.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 2,
+      "n_dt": 2,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch",
+        "crack"
+      ]
+    }
+  ],
+  "unscoreable_zero_gt": []
+}

@@ -1,0 +1,271 @@
+{
+  "worst_scoreable": [
+    {
+      "file_name": "car87_jpg.rf.3fb0df3468d41d6dc4391ece49d05ab1.jpg",
+      "mean_iou": 0.7709475832164264,
+      "n_gt": 1,
+      "n_dt": 3,
+      "n_matched": 1,
+      "predicted_classes": [
+        "rear_bumper",
+        "door",
+        "door"
+      ]
+    },
+    {
+      "file_name": "train287_jpg.rf.a6a295fff92948060e0649296db71102.jpg",
+      "mean_iou": 0.7921727783424297,
+      "n_gt": 5,
+      "n_dt": 6,
+      "n_matched": 4,
+      "predicted_classes": [
+        "front_bumper",
+        "door",
+        "windshield",
+        "door",
+        "bonnet",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train137_jpg.rf.da91ac6e70a0859819dd67f7b0b30cba.jpg",
+      "mean_iou": 0.795410412863065,
+      "n_gt": 3,
+      "n_dt": 3,
+      "n_matched": 3,
+      "predicted_classes": [
+        "door",
+        "door",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train280_jpg.rf.dab301834c6096d53318a10c003fc877.jpg",
+      "mean_iou": 0.7981924811708564,
+      "n_gt": 3,
+      "n_dt": 3,
+      "n_matched": 3,
+      "predicted_classes": [
+        "door",
+        "door",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train188_jpg.rf.649354ed3bc34d0deda30305fe95b153.jpg",
+      "mean_iou": 0.8038859751585647,
+      "n_gt": 4,
+      "n_dt": 5,
+      "n_matched": 4,
+      "predicted_classes": [
+        "windshield",
+        "front_bumper",
+        "headlamp",
+        "bonnet",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "new_28_png_jpg.rf.0c9466d1600386142f9eaadca40781d1.jpg",
+      "mean_iou": 0.807706780727161,
+      "n_gt": 5,
+      "n_dt": 5,
+      "n_matched": 5,
+      "predicted_classes": [
+        "windshield",
+        "front_bumper",
+        "headlamp",
+        "headlamp",
+        "bonnet"
+      ]
+    },
+    {
+      "file_name": "train281_jpg.rf.a29133c7cfea5397c9ef5c5fb5dc2f58.jpg",
+      "mean_iou": 0.8162343395300623,
+      "n_gt": 7,
+      "n_dt": 7,
+      "n_matched": 7,
+      "predicted_classes": [
+        "front_bumper",
+        "bonnet",
+        "windshield",
+        "headlamp",
+        "door",
+        "door",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train325_jpg.rf.75e6e2c13aad921f875f3c01821b1b37.jpg",
+      "mean_iou": 0.8240622503655359,
+      "n_gt": 7,
+      "n_dt": 8,
+      "n_matched": 7,
+      "predicted_classes": [
+        "windshield",
+        "front_bumper",
+        "headlamp",
+        "bonnet",
+        "door",
+        "door",
+        "headlamp",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "new_21_png_jpg.rf.0acd6adf36fe441fc481c7ebf61d1d30.jpg",
+      "mean_iou": 0.8245772122884047,
+      "n_gt": 7,
+      "n_dt": 7,
+      "n_matched": 7,
+      "predicted_classes": [
+        "front_bumper",
+        "bonnet",
+        "windshield",
+        "door",
+        "headlamp",
+        "headlamp",
+        "door"
+      ]
+    },
+    {
+      "file_name": "new_81_png_jpg.rf.7baf958291aaaa1154264e70d8f396ed.jpg",
+      "mean_iou": 0.8253436440278277,
+      "n_gt": 5,
+      "n_dt": 5,
+      "n_matched": 5,
+      "predicted_classes": [
+        "bonnet",
+        "windshield",
+        "front_bumper",
+        "headlamp",
+        "headlamp"
+      ]
+    }
+  ],
+  "unscoreable_zero_gt": [
+    {
+      "file_name": "car25_jpg.rf.a2a62c4f3c8af7837e5ee62d1b806750.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "rear_bumper"
+      ]
+    },
+    {
+      "file_name": "te13_jpg.rf.27bcb20fcecb7e8977bb1d602ccc422a.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "te94_jpg.rf.aa15de8c5566a2cb10b3885bf64fb44f.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 3,
+      "n_matched": 0,
+      "predicted_classes": [
+        "door",
+        "door",
+        "rear_bumper"
+      ]
+    },
+    {
+      "file_name": "train106_jpg.rf.2084abb3118511ebe7f9e0edc2bd024f.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "door"
+      ]
+    },
+    {
+      "file_name": "train247_jpg.rf.903f05e3b756c4ac3d320171353d68f1.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 4,
+      "n_matched": 0,
+      "predicted_classes": [
+        "door",
+        "door",
+        "rear_bumper",
+        "rear_bumper"
+      ]
+    },
+    {
+      "file_name": "train276_jpg.rf.34450f3845efed0fe8c9df3c00379f50.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 6,
+      "n_matched": 0,
+      "predicted_classes": [
+        "bonnet",
+        "windshield",
+        "front_bumper",
+        "headlamp",
+        "headlamp",
+        "door"
+      ]
+    },
+    {
+      "file_name": "train33_jpg.rf.510694da90dcbdf843ed037d60b35dbf.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 3,
+      "n_matched": 0,
+      "predicted_classes": [
+        "door",
+        "door",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train50_jpg.rf.d403f3ee1879f7d73fc0294eb86c1cfc.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 5,
+      "n_matched": 0,
+      "predicted_classes": [
+        "windshield",
+        "bonnet",
+        "front_bumper",
+        "headlamp",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train60_jpg.rf.f938226478793bc550cbb0c624716022.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 5,
+      "n_matched": 0,
+      "predicted_classes": [
+        "front_bumper",
+        "bonnet",
+        "headlamp",
+        "windshield",
+        "headlamp"
+      ]
+    },
+    {
+      "file_name": "train97_jpg.rf.438d77cdd7cfb4c69bce36fa9ca334c9.jpg",
+      "mean_iou": null,
+      "n_gt": 0,
+      "n_dt": 6,
+      "n_matched": 0,
+      "predicted_classes": [
+        "windshield",
+        "front_bumper",
+        "bonnet",
+        "headlamp",
+        "door",
+        "door"
+      ]
+    }
+  ]
+}

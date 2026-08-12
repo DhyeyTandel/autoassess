@@ -1,0 +1,57 @@
+// AutoAssess pipeline architecture — reports/architecture.dot
+//
+// Reflects the actual call graph in src/autoassess/infer/pipeline.py
+// (run_pipeline_with_masks), not an idealized/aspirational version:
+// two independently-trained YOLOv8-seg models run over the same image,
+// their outputs are associated by mask IoU, graded by a hand-authored
+// heuristic (see autoassess.models.severity for its documented
+// circularity caveat), and reduced to one triage decision.
+//
+// Render: dot -Tpdf reports/architecture.dot -o reports/figures/architecture.pdf
+
+digraph AutoAssessPipeline {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=11, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=9];
+    graph [fontsize=14, labelloc=t, label="AutoAssess — inference pipeline\n(src/autoassess/infer/pipeline.py)", pad=0.3];
+
+    input [label="Input image\n(uploaded photo)", shape=oval, fillcolor="#f0f0f0"];
+
+    subgraph cluster_damage {
+        label="Damage detection";
+        style="rounded,dashed"; color="#2a78d6"; fontcolor="#2a78d6";
+        damage_model [label="YOLOv8-seg\n(train_yolo.py)\ntrained on CarDD\n6 damage classes", fillcolor="#dceafb"];
+    }
+
+    subgraph cluster_parts {
+        label="Part segmentation";
+        style="rounded,dashed"; color="#2a78d6"; fontcolor="#2a78d6";
+        parts_model [label="YOLOv8-seg\n(train_parts.py)\ntrained on Carparts-Seg\n6 panel classes", fillcolor="#dceafb"];
+    }
+
+    damage_out [label="Damage instances\n{class, mask, bbox, conf}", shape=note, fillcolor="#fff7e0"];
+    parts_out [label="Part instances\n{class, mask, bbox, conf}", shape=note, fillcolor="#fff7e0"];
+
+    associate [label="Association\n(associate.py)\nmax mask-IoU match,\nfallback: \"unassigned\"", fillcolor="#eaf7ea"];
+
+    severity [label="Severity grading\n(models/severity.py)\nclass-weighted area\nfraction, hand-authored\nheuristic — see\ncircularity caveat", fillcolor="#eaf7ea"];
+
+    records [label="Per-instance record\n{part, damage_type,\nseverity, mask_area_px,\nconfidence}", shape=note, fillcolor="#fff7e0"];
+
+    triage [label="Triage decision\n(pipeline.py)\nauto_approve /\nhuman_review /\ntotal_loss_review", fillcolor="#fbe3e3"];
+
+    output [label="Structured JSON\n+ overlay image\n(app.py demo)", shape=oval, fillcolor="#f0f0f0"];
+
+    input -> damage_model;
+    input -> parts_model;
+    damage_model -> damage_out;
+    parts_model -> parts_out;
+    damage_out -> associate;
+    parts_out -> associate;
+    associate -> severity [label="  per damage\n  instance"];
+    severity -> records;
+    records -> triage [label="  all instances,\n  one image"];
+    triage -> output;
+    records -> output;
+}
