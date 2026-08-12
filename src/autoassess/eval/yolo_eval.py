@@ -1,0 +1,138 @@
+"""Shared Ultralytics-YOLO evaluation helpers.
+
+Extracted from `train_yolo.py` so `train_parts.py` (a second YOLOv8-seg
+model, trained on the vehicle-parts dataset instead of CarDD) can reuse the
+same COCO-eval-via-pycocotools pipeline, latency benchmarking, and
+peak-VRAM tracking without duplicating them — both models are scored
+identically regardless of which dataset they were trained on.
+"""
+
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+
+from autoassess.eval.coco_eval import build_coco_ground_truth, run_coco_eval
+from autoassess.eval.metrics import measure_inference_latency
+
+
+def resolve_dataset_yaml_for_ultralytics(dataset_config_path: Path) -> str:
+    """Return a path to a dataset YAML that Ultralytics will resolve correctly.
+
+    Every checked-in dataset YAML in this project (`configs/cardd.yaml`,
+    `configs/carparts.yaml`) documents its `path:` as "relative to this
+    file's location" — but Ultralytics' own `check_det_dataset` does *not*
+    resolve a relative `path:` against the YAML's directory. It resolves
+    against the YAML's directory only if that combination already exists as
+    a real path; otherwise it silently falls back to resolving relative to
+    Ultralytics' own global datasets cache dir (`~/.../Ultralytics/settings
+    -> datasets_dir`, a sibling of this repo, not inside it). Since this
+    project always writes converted data under `data/processed/<name>`
+    inside the repo, that fallback resolves to the wrong directory (or
+    nowhere), and training fails with a "images not found" error that gives
+    no hint the `path:` was ever misresolved.
+
+    Rather than hardcode an absolute, machine-specific path into the
+    checked-in config (which would break on every other checkout), this
+    writes a temporary copy of the YAML with `path:` rewritten to an
+    absolute path resolved against the *source* YAML's own directory — the
+    semantics the comment in every one of these files already promises.
+    """
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.load(dataset_config_path)
+    if "path" in cfg:
+        raw_path = str(cfg.path)
+        resolved = (dataset_config_path.parent / raw_path).resolve()
+        cfg.path = str(resolved)
+
+    tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 — file must outlive this function
+        mode="w", suffix=".yaml", delete=False, prefix="autoassess_resolved_"
+    )
+    OmegaConf.save(cfg, tmp.name)
+    return tmp.name
+
+
+def reset_peak_vram_for_yolo(device_arg: str) -> None:
+    if device_arg not in ("cpu", "mps") and not device_arg.startswith("mps"):
+        torch.cuda.reset_peak_memory_stats(int(device_arg) if device_arg.isdigit() else device_arg)
+
+
+def peak_vram_mb_for_yolo(device_arg: str) -> float | None:
+    """Peak VRAM in MB since the last `reset_peak_vram_for_yolo` call.
+
+    Only CUDA exposes a true peak-memory counter; Ultralytics' own device
+    string ('0', 'cpu', 'mps') doesn't map to a `torch.device` 1:1, so this
+    mirrors `autoassess.eval.metrics.peak_vram_mb`'s CUDA-only behaviour
+    using Ultralytics' own device argument convention.
+    """
+    if device_arg in ("cpu", "mps") or device_arg.startswith("mps"):
+        return None
+    device = int(device_arg) if device_arg.isdigit() else device_arg
+    return torch.cuda.max_memory_allocated(device) / 1e6
+
+
+def run_yolo_coco_eval(
+    eval_model: Any,  # noqa: ANN401 — ultralytics.YOLO has no exported public type
+    images_dir: Path,
+    labels_dir: Path,
+    class_names: list[str],
+) -> dict[str, Any]:
+    """Run inference over every image in `images_dir` and score the
+    predictions against COCO ground truth reconstructed from the converted
+    YOLO-seg labels, using the same pycocotools pipeline as Mask R-CNN's
+    trainer so every model in this project is scored identically.
+    """
+    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names)
+    file_name_to_id = {img["file_name"]: img["id"] for img in coco_gt_dict["images"]}
+
+    detections: list[dict[str, Any]] = []
+    for file_name, image_id in file_name_to_id.items():
+        result = eval_model.predict(str(images_dir / file_name), verbose=False)[0]
+        if result.masks is None:
+            continue
+        height, width = result.orig_shape
+        for poly_xy, cls, conf in zip(
+            result.masks.xy, result.boxes.cls.tolist(), result.boxes.conf.tolist(), strict=True
+        ):
+            if poly_xy.shape[0] < 3:
+                continue
+            rle = polygon_xy_to_rle(poly_xy, width, height)
+            from pycocotools import mask as mask_utils
+
+            bbox = mask_utils.toBbox(rle).tolist()
+            detections.append({
+                "image_id": image_id,
+                "category_id": int(cls) + 1,
+                "segmentation": rle,
+                "bbox": bbox,
+                "score": float(conf),
+            })
+
+    return run_coco_eval(coco_gt_dict, detections, class_names)
+
+
+def polygon_xy_to_rle(poly_xy: np.ndarray, width: int, height: int) -> dict[str, Any]:
+    from pycocotools import mask as mask_utils
+
+    rles = mask_utils.frPyObjects([poly_xy.flatten().tolist()], height, width)
+    rle = mask_utils.merge(rles)
+    rle["counts"] = rle["counts"].decode("ascii")
+    return rle  # type: ignore[no-any-return]
+
+
+def measure_yolo_latency(
+    eval_model: Any, images_dir: Path, imgsz: int, n_images: int = 30  # noqa: ANN401
+) -> dict[str, float]:
+    image_paths = sorted(
+        [*images_dir.glob("*.jpg"), *images_dir.glob("*.png")]
+    )[:n_images]
+
+    def _predict(image_path: Path) -> None:
+        eval_model.predict(str(image_path), imgsz=imgsz, verbose=False)
+
+    return measure_inference_latency(_predict, image_paths)
