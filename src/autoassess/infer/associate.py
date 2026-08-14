@@ -81,8 +81,8 @@ def parse_args() -> argparse.Namespace:
                    help="Heuristic severity config (default: configs/severity.yaml).")
     p.add_argument("--source", type=Path, required=True,
                    help="Path to a single input image.")
-    p.add_argument("--damage-conf", type=float, default=0.25,
-                   help="Confidence threshold for the damage model (default: 0.25).")
+    p.add_argument("--damage-conf", type=float, default=0.15,
+                   help="Confidence threshold for the damage model (default: 0.15).")
     p.add_argument("--parts-conf", type=float, default=0.25,
                    help="Confidence threshold for the parts model (default: 0.25).")
     p.add_argument("--iou-threshold", type=float, default=DEFAULT_IOU_THRESHOLD,

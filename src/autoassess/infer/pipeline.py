@@ -88,7 +88,11 @@ def triage_decision(instances: list[dict[str, Any]], config: TriageConfig) -> di
     plus the numbers that drove it, so a reviewer can see why."""
     total_area = sum(r["mask_area_px"] for r in instances)
     any_severe = any(r["severity"] == "severe" for r in instances)
-    all_minor = all(r["severity"] == "minor" for r in instances)
+    # `all(...)` on an empty list is vacuously True, so without the explicit
+    # `instances` check a photo with zero detections (nothing found, not
+    # "confirmed no damage") would silently satisfy "all minor" and
+    # auto-approve. Zero detections must always fall through to human review.
+    all_minor = bool(instances) and all(r["severity"] == "minor" for r in instances)
 
     if any_severe or total_area > config.total_loss_min_total_area_px:
         decision = TOTAL_LOSS_REVIEW
@@ -115,7 +119,7 @@ def run_pipeline_with_masks(
     parts_dataset_config: Path,
     severity_config_path: Path,
     triage_config_path: Path,
-    damage_conf: float = 0.25,
+    damage_conf: float = 0.15,
     parts_conf: float = 0.25,
     iou_threshold: float = 0.10,
     device: str = "cpu",
@@ -179,7 +183,7 @@ def parse_args() -> argparse.Namespace:
                    help="Config containing the triage: section (default: configs/severity.yaml, "
                         "same file as --severity-config).")
     p.add_argument("--source", type=Path, required=True)
-    p.add_argument("--damage-conf", type=float, default=0.25)
+    p.add_argument("--damage-conf", type=float, default=0.15)
     p.add_argument("--parts-conf", type=float, default=0.25)
     p.add_argument("--iou-threshold", type=float, default=0.10)
     p.add_argument("--device", type=str, default="cpu")
