@@ -46,6 +46,7 @@ from autoassess.eval.yolo_eval import (
     peak_vram_mb_for_yolo,
     reset_peak_vram_for_yolo,
     resolve_dataset_yaml_for_ultralytics,
+    resolve_processed_dir,
     run_yolo_coco_eval,
 )
 from autoassess.utils.config import load_config, resolve_paths
@@ -206,7 +207,7 @@ def main() -> None:
     del results  # Ultralytics' own results_dict isn't used — see run_yolo_coco_eval below
 
     class_names = load_class_names(args.dataset_config)
-    processed_dir = Path(cfg.data.processed_dir) / "cardd"
+    processed_dir = resolve_processed_dir(args.dataset_config)
     best_weights = run_dir / "weights" / "best.pt"
     eval_model = YOLO(str(best_weights)) if best_weights.exists() else model
 

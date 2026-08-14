@@ -57,6 +57,23 @@ def resolve_dataset_yaml_for_ultralytics(dataset_config_path: Path) -> str:
     return tmp.name
 
 
+def resolve_processed_dir(dataset_config_path: Path) -> Path:
+    """Return the dataset's processed-data root (the directory containing
+    images/ and labels/) by resolving the dataset YAML's own `path:` field
+    against that file's directory — the same semantics
+    `resolve_dataset_yaml_for_ultralytics` promises, but returned as a Path
+    for callers that need to build eval image/label paths directly rather
+    than hand the YAML to Ultralytics. Deriving this from the YAML (instead
+    of hardcoding e.g. `processed_dir / "cardd"`) is what lets train_yolo.py
+    evaluate whichever dataset --dataset-config actually points at.
+    """
+    from omegaconf import OmegaConf
+
+    cfg = OmegaConf.load(dataset_config_path)
+    raw_path = str(cfg.path)
+    return (dataset_config_path.parent / raw_path).resolve()
+
+
 def reset_peak_vram_for_yolo(device_arg: str) -> None:
     if device_arg not in ("cpu", "mps") and not device_arg.startswith("mps"):
         torch.cuda.reset_peak_memory_stats(int(device_arg) if device_arg.isdigit() else device_arg)
