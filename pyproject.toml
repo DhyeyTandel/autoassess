@@ -32,10 +32,12 @@ dependencies = [
     "rich>=13.7.0",
     # image handling
     "Pillow>=10.3.0",
+    "pillow-heif>=0.18.0",
     "numpy>=1.26.0",
     "pycocotools>=2.0.11",
     # demo UI
     "gradio>=4.44.0",
+    "kaggle>=2.2.4",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +67,7 @@ autoassess-train-parts    = "autoassess.train.train_parts:main"
 autoassess-associate      = "autoassess.infer.associate:main"
 autoassess-pipeline       = "autoassess.infer.pipeline:main"
 autoassess-report         = "autoassess.eval.report:main"
+autoassess-convert-vehide = "autoassess.data.convert_vehide:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autoassess"]

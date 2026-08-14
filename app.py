@@ -21,6 +21,7 @@ from typing import Any
 
 import gradio as gr
 import numpy as np
+import pillow_heif
 from PIL import Image, ImageDraw
 
 from autoassess.infer.associate import MaskInstance
@@ -30,6 +31,8 @@ from autoassess.infer.pipeline import (
     TOTAL_LOSS_REVIEW,
     run_pipeline_with_masks,
 )
+
+pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.heif uploads
 
 DAMAGE_WEIGHTS = Path(os.environ.get("DAMAGE_WEIGHTS", "runs/yolov8_seg_v1/weights/best.pt"))
 PARTS_WEIGHTS = Path(os.environ.get("PARTS_WEIGHTS", "runs/parts_seg_v1/weights/best.pt"))
@@ -120,7 +123,10 @@ def render_triage_card(triage: dict[str, Any]) -> str:
         f'<span class="aa-chip-dot"></span>{count} {name}</span>'
         for name, count, rgb in counts
         if count > 0
-    ) or '<span class="aa-chip aa-chip-muted">No damage instances detected</span>'
+    ) or (
+        '<span class="aa-chip aa-chip-muted">Nothing detected &mdash; '
+        "not the same as confirmed damage-free, verify manually</span>"
+    )
 
     return f"""
 <div class="aa-verdict" style="--verdict:{meta['hex']}">
