@@ -1,0 +1,46 @@
+# =============================================================================
+# configs/vehide.yaml — Ultralytics dataset YAML for VehiDE (YOLOv8-seg format)
+#
+# VehiDE (Huynh et al., 2023, IEEE) — https://www.kaggle.com/datasets/hendrichscullen/vehide-dataset-automatic-vehicle-damage-detection
+# Source annotations are VIA (VGG Image Annotator) polygon JSON, not COCO —
+# converted by src/autoassess/data/convert_vehide.py, which is the single
+# source of truth for the Vietnamese label -> English class name mapping
+# below (asserted against at conversion time, same as convert.py does for
+# CarDD's COCO categories).
+#
+# Chosen over CarDD's 6 classes specifically for "mat_bo_phan" (lost/missing
+# part) and "rach"/"thung" (torn/punctured) — structural damage types CarDD
+# has no equivalent for. Kept as a separate model (see train_vehide.py)
+# rather than merged into the CarDD model: different annotation source and
+# quality, safer to evaluate independently before ever combining.
+# =============================================================================
+
+path: ../data/processed/vehide     # relative to this file's location; resolved at runtime
+train: images/train
+val: images/val
+test: images/test
+
+# id -> name, in the exact order expected in the source VIA region "class"
+# labels (see vietnamese_label_map in convert_vehide.py for the raw ->
+# English mapping this order is derived from).
+names:
+  0: scratch
+  1: dent
+  2: torn
+  3: broken_lamp
+  4: missing_part
+  5: punctured
+  6: shattered_glass
+
+# Raw Vietnamese region-class strings found in the source VIA JSON, in the
+# same order as `names` above — convert_vehide.py asserts every label it
+# encounters is one of these keys before conversion, and fails loudly on
+# anything unrecognised rather than silently dropping it.
+vietnamese_labels:
+  0: tray_son        # scratched paint
+  1: mop_lom          # dented / crumpled
+  2: rach             # torn / ripped
+  3: be_den           # broken light
+  4: mat_bo_phan      # missing / detached part
+  5: thung            # punctured / holed
+  6: vo_kinh          # broken / shattered glass
