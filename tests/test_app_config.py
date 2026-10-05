@@ -8,6 +8,7 @@ cost. It is loaded by file path so the test does not depend on sys.path.
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 import tempfile
 from pathlib import Path
@@ -141,3 +142,47 @@ def test_assess_removes_temp_file_when_pipeline_raises(
     with pytest.raises(RuntimeError, match="boom"):
         app_module.assess(_noisy_rgb())
     assert len(seen) == 1 and not seen[0].exists()
+
+
+def test_normalize_upload_none(app_module: ModuleType) -> None:
+    assert app_module.normalize_upload(None) is None
+
+
+@pytest.mark.parametrize("mode", ["RGBA", "L", "P"])
+def test_normalize_upload_returns_rgb(app_module: ModuleType, mode: str) -> None:
+    img = _noisy_rgb().convert(mode)
+    out = app_module.normalize_upload(img)
+    assert out is not img
+    assert out.mode == "RGB"
+    assert out.size == img.size
+
+
+def test_normalize_upload_applies_exif_orientation(app_module: ModuleType) -> None:
+    img = _noisy_rgb((32, 24))
+    exif = Image.Exif()
+    exif[274] = 6  # rotate 90 CW to display -> width/height swap
+    reloaded = Image.open(io.BytesIO(_save_with_exif(img, exif)))
+    out = app_module.normalize_upload(reloaded)
+    assert out.size == (24, 32)
+    # Idempotent: gradio already transposes, and the tag is gone after one pass.
+    assert app_module.normalize_upload(out).size == (24, 32)
+
+
+def _save_with_exif(img: Image.Image, exif: Image.Exif) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", exif=exif)
+    return buf.getvalue()
+
+
+def test_demo_has_upload_dependency_on_image_input(app_module: ModuleType) -> None:
+    image_id = app_module.image_input._id
+    deps = app_module.demo.config["dependencies"]
+    matches = [
+        d
+        for d in deps
+        if any(t[0] == image_id and t[1] == "upload" for t in d["targets"])
+    ]
+    assert len(matches) == 1
+    assert matches[0]["inputs"] == [image_id]
+    assert matches[0]["outputs"] == [image_id]
+    assert app_module.image_input.format == "png"

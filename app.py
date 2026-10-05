@@ -43,7 +43,7 @@ from typing import Any
 
 import gradio as gr
 import pillow_heif
-from PIL import Image
+from PIL import Image, ImageOps
 
 from autoassess.infer.pipeline import (
     AUTO_APPROVE,
@@ -206,6 +206,22 @@ def save_upload_lossless(image: Image.Image, directory: Path | None = None) -> P
         path.unlink(missing_ok=True)
         raise
     return path
+
+
+def normalize_upload(image: Image.Image | None) -> Image.Image | None:
+    """Return a new RGB, EXIF-upright copy of `image` (None passes through).
+
+    Used on upload so the input preview shows a browser-renderable PNG instead
+    of the raw .heic gradio would otherwise serve back. Gradio's own
+    preprocess (image_utils.preprocess_image) already applies
+    ImageOps.exif_transpose when Orientation != 1 and the transposed image
+    carries no Orientation tag, so by the time a value reaches Python it is
+    upright; transposing again here is a no-op for those images and only
+    matters for callers passing an untransposed image.
+    """
+    if image is None:
+        return None
+    return ImageOps.exif_transpose(image).convert("RGB")
 
 
 def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
@@ -406,7 +422,9 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
     )
     with gr.Row(equal_height=False):
         with gr.Column(min_width=320):
-            image_input = gr.Image(type="pil", label="Vehicle photo")
+            # format="png": the default (webp) is lossy; the re-served preview should
+            # be lossless and browser-renderable (raw .heic is not).
+            image_input = gr.Image(type="pil", label="Vehicle photo", format="png")
             submit_btn = gr.Button("Assess damage", variant="primary")
         with gr.Column(min_width=320):
             overlay_output = gr.Image(type="pil", label="Detected damage + parts")
@@ -419,6 +437,8 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
         "through human review until independently confirmed.</div>"
     )
 
+    # .upload (not .change): the returned value does not re-fire .upload, so no loop.
+    image_input.upload(normalize_upload, inputs=image_input, outputs=image_input)
     submit_btn.click(
         fn=assess, inputs=[image_input], outputs=[overlay_output, json_output, triage_output]
     )
