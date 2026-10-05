@@ -41,6 +41,7 @@ from autoassess.data.augmentations import (
 )
 from autoassess.eval.coco_eval import load_class_names
 from autoassess.eval.metrics import build_metrics_json, count_params, write_metrics_json
+from autoassess.eval.scoring import SCORING_CONF_THRESHOLD
 from autoassess.eval.yolo_eval import (
     measure_yolo_latency,
     peak_vram_mb_for_yolo,
@@ -252,9 +253,9 @@ def main() -> None:
         early_stopped=early_stop_state["no_improve"] >= args.patience,
         wall_time_seconds_total=total_wall_time,
         epoch_wall_times_seconds=epoch_times,
-        box_metrics=final_eval["box"],
-        mask_metrics=final_eval["mask"],
-        mask_iou=final_eval["mask_iou_mean"],
+        eval_result=final_eval,
+        eval_split="val",
+        scoring_conf=SCORING_CONF_THRESHOLD,
         inference=latency,
         model_info=model_info,
     )

@@ -1,10 +1,13 @@
 """Shared metrics schema and COCO-eval helpers for cross-model comparison.
 
 Both ``train_yolo.py`` and ``train_maskrcnn.py`` write ``runs/<name>/metrics.json``
-in this normalised schema so ``autoassess.eval.compare`` can load either file
+in this normalised schema (version 2; legacy v1 files lack ``schema_version``
+and their per-class "precision" is really AP50) so ``autoassess.eval.compare`` can load either file
 without framework-specific branching:
 
     {
+        "schema_version": 2,                   # absent in legacy (v1) files
+        "eval_split": "val" | "test",          # split the metrics were scored on
         "run_name": str,
         "model_type": "yolov8-seg" | "maskrcnn",
         "model": str,                          # checkpoint / architecture id
@@ -25,9 +28,27 @@ without framework-specific branching:
             "box_map50_95": float,
             "mask_map50": float,
             "mask_map50_95": float,
-            "mask_iou_mean": float,
+            "mask_iou_true_positives": float,  # mean IoU of matched pairs (>= 0.5)
+            "mask_iou_per_gt": float,          # mean over all GTs, misses count 0
+            "operating_point": {
+                "conf": float,                 # deployment threshold (0.25)
+                "iou": float,                  # match IoU (0.5)
+                "scoring_conf": float,         # conf the detections were kept at (AP)
+                "box": {"precision": float, "recall": float, "f1": float},   # macro
+                "mask": {"precision": float, "recall": float, "f1": float}   # macro
+            },
             "per_class": {
-                "<class_name>": {"max_recall": float, "box_ap50": float, "mask_ap50": float}
+                "<class_name>": {
+                    "box_ap50": float,
+                    "mask_ap50": float,
+                    "max_recall": float,       # mask, no conf cutoff (not P/R)
+                    "precision": float,        # mask, at operating_point.conf
+                    "recall": float,
+                    "f1": float,
+                    "tp": int, "fp": int, "fn": int,
+                    "f1_opt_conf": float,      # mask, conf maximising F1
+                    "f1_opt": float
+                }
             }
         },
         "inference": {
@@ -393,25 +414,46 @@ def build_metrics_json(
     early_stopped: bool,
     wall_time_seconds_total: float,
     epoch_wall_times_seconds: list[float],
-    box_metrics: dict[str, Any],
-    mask_metrics: dict[str, Any],
-    mask_iou: float,
+    eval_result: dict[str, Any],
+    eval_split: str,
+    scoring_conf: float,
     inference: dict[str, float],
     model_info: dict[str, Any],
 ) -> dict[str, Any]:
-    """Assemble the normalised metrics.json payload documented at module level."""
-    default_pc = {"max_recall": 0.0, "ap50": 0.0}
-    per_class: dict[str, dict[str, float]] = {}
+    """Assemble the schema-v2 metrics.json payload documented at module level.
+
+    ``eval_result`` is the output of ``coco_eval.run_coco_eval``. Per-class
+    precision/recall/F1/TP/FP/FN are the mask values at the operating point.
+    """
+    op = eval_result["operating_point"]
+    mask_op = op["mask"]["per_class"]
+    empty_ap = {"ap50": 0.0, "max_recall": 0.0}
+    empty_f1 = {"conf": 0.0, "f1": 0.0}
+    per_class: dict[str, dict[str, Any]] = {}
     for name in class_names:
-        box_pc = box_metrics["per_class"].get(name, default_pc)
-        mask_pc = mask_metrics["per_class"].get(name, default_pc)
+        box_pc = eval_result["box"]["per_class"].get(name, empty_ap)
+        mask_pc = eval_result["mask"]["per_class"].get(name, empty_ap)
+        mop = mask_op.get(
+            name, {"tp": 0, "fp": 0, "fn": 0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+        )
+        f1o = eval_result["f1_optimal"]["mask"].get(name, empty_f1)
         per_class[name] = {
-            "max_recall": mask_pc.get("max_recall", 0.0),
             "box_ap50": box_pc["ap50"],
             "mask_ap50": mask_pc["ap50"],
+            "max_recall": mask_pc.get("max_recall", 0.0),
+            "precision": mop["precision"],
+            "recall": mop["recall"],
+            "f1": mop["f1"],
+            "tp": mop["tp"],
+            "fp": mop["fp"],
+            "fn": mop["fn"],
+            "f1_opt_conf": f1o["conf"],
+            "f1_opt": f1o["f1"],
         }
 
     return {
+        "schema_version": 2,
+        "eval_split": eval_split,
         "run_name": run_name,
         "model_type": model_type,
         "model": model,
@@ -431,11 +473,19 @@ def build_metrics_json(
         ),
         "epoch_wall_times_seconds": epoch_wall_times_seconds,
         "metrics": {
-            "box_map50": box_metrics["map50"],
-            "box_map50_95": box_metrics["map50_95"],
-            "mask_map50": mask_metrics["map50"],
-            "mask_map50_95": mask_metrics["map50_95"],
-            "mask_iou_mean": mask_iou,
+            "box_map50": eval_result["box"]["map50"],
+            "box_map50_95": eval_result["box"]["map50_95"],
+            "mask_map50": eval_result["mask"]["map50"],
+            "mask_map50_95": eval_result["mask"]["map50_95"],
+            "mask_iou_true_positives": eval_result["mask_iou_true_positives"],
+            "mask_iou_per_gt": eval_result["mask_iou_per_gt"],
+            "operating_point": {
+                "conf": op["conf"],
+                "iou": op["iou"],
+                "scoring_conf": scoring_conf,
+                "box": dict(op["box"]["macro"]),
+                "mask": dict(op["mask"]["macro"]),
+            },
             "per_class": per_class,
         },
         "inference": inference,

@@ -13,7 +13,11 @@ Trained on CarDD (6 damage classes).
 | Box mAP@0.5:0.95 | 0.5090 |
 | Mask mAP@0.5 | 0.6008 |
 | Mask mAP@0.5:0.95 | 0.4834 |
-| Mean mask IoU | 0.8031 |
+| Mask IoU (true positives) | n/a |
+| Mask IoU (per GT, misses = 0) | n/a |
+| Macro P / R / F1 @ conf 0.25 (mask) | n/a |
+| Mask IoU (legacy, matched pairs only) | 0.8031 |
+| Evaluated on | val (legacy) |
 | Inference latency (ms/image, mean) | 19.2 |
 | Inference latency (ms/image, p95) | 21.3 |
 | Parameters (total) | 3,264,786 |
@@ -25,14 +29,16 @@ Trained on CarDD (6 damage classes).
 
 ### Per-class
 
-| Class | Precision | Recall | Box AP50 | Mask AP50 |
-|---|---|---|---|---|
-| dent | 0.4505 | 0.5269 | 0.4544 | 0.4505 |
-| scratch | 0.3902 | 0.4808 | 0.4084 | 0.3902 |
-| crack | 0.1300 | 0.2260 | 0.1517 | 0.1300 |
-| glass shatter | 0.9701 | 0.9704 | 0.9701 | 0.9701 |
-| lamp broken | 0.7640 | 0.8014 | 0.7640 | 0.7640 |
-| tire flat | 0.8995 | 0.9194 | 0.8995 | 0.8995 |
+| Class | Precision@0.25 | Recall@0.25 | F1@0.25 | Best-F1 conf | Box AP50 | Mask AP50 | Max recall |
+|---|---|---|---|---|---|---|---|
+| dent | n/a | n/a | n/a | n/a | 0.4544 | 0.4505 | n/a |
+| scratch | n/a | n/a | n/a | n/a | 0.4084 | 0.3902 | n/a |
+| crack | n/a | n/a | n/a | n/a | 0.1517 | 0.1300 | n/a |
+| glass shatter | n/a | n/a | n/a | n/a | 0.9701 | 0.9701 | n/a |
+| lamp broken | n/a | n/a | n/a | n/a | 0.7640 | 0.7640 | n/a |
+| tire flat | n/a | n/a | n/a | n/a | 0.8995 | 0.8995 | n/a |
+
+Legacy metrics (schema v1): evaluated on the val split before the eval fixes; re-score with autoassess-eval for test-split numbers.
 
 ## Damage detection — Mask R-CNN
 
@@ -51,7 +57,11 @@ Trained on Carparts-Seg, remapped to 6 panel classes.
 | Box mAP@0.5:0.95 | 0.8162 |
 | Mask mAP@0.5 | 0.9347 |
 | Mask mAP@0.5:0.95 | 0.7956 |
-| Mean mask IoU | 0.9011 |
+| Mask IoU (true positives) | n/a |
+| Mask IoU (per GT, misses = 0) | n/a |
+| Macro P / R / F1 @ conf 0.25 (mask) | n/a |
+| Mask IoU (legacy, matched pairs only) | 0.9011 |
+| Evaluated on | val (legacy) |
 | Inference latency (ms/image, mean) | 18.0 |
 | Inference latency (ms/image, p95) | 21.0 |
 | Parameters (total) | 3,264,786 |
@@ -63,14 +73,16 @@ Trained on Carparts-Seg, remapped to 6 panel classes.
 
 ### Per-class
 
-| Class | Precision | Recall | Box AP50 | Mask AP50 |
-|---|---|---|---|---|
-| bonnet | 0.9439 | 0.9860 | 0.9439 | 0.9439 |
-| front_bumper | 0.9687 | 0.9904 | 0.9687 | 0.9687 |
-| rear_bumper | 0.9191 | 0.9787 | 0.9191 | 0.9191 |
-| door | 0.9377 | 0.9868 | 0.9377 | 0.9377 |
-| headlamp | 0.8886 | 0.9254 | 0.8884 | 0.8886 |
-| windshield | 0.9503 | 0.9953 | 0.9503 | 0.9503 |
+| Class | Precision@0.25 | Recall@0.25 | F1@0.25 | Best-F1 conf | Box AP50 | Mask AP50 | Max recall |
+|---|---|---|---|---|---|---|---|
+| bonnet | n/a | n/a | n/a | n/a | 0.9439 | 0.9439 | n/a |
+| front_bumper | n/a | n/a | n/a | n/a | 0.9687 | 0.9687 | n/a |
+| rear_bumper | n/a | n/a | n/a | n/a | 0.9191 | 0.9191 | n/a |
+| door | n/a | n/a | n/a | n/a | 0.9377 | 0.9377 | n/a |
+| headlamp | n/a | n/a | n/a | n/a | 0.8884 | 0.8886 | n/a |
+| windshield | n/a | n/a | n/a | n/a | 0.9503 | 0.9503 | n/a |
+
+Legacy metrics (schema v1): evaluated on the val split before the eval fixes; re-score with autoassess-eval for test-split numbers.
 
 ## Damage detection — YOLOv8-seg (VehiDE)
 
@@ -83,7 +95,11 @@ Trained on VehiDE (7 structural/cosmetic damage classes, incl. torn/punctured/mi
 | Box mAP@0.5:0.95 | 0.2598 |
 | Mask mAP@0.5 | 0.3622 |
 | Mask mAP@0.5:0.95 | 0.2099 |
-| Mean mask IoU | 0.7514 |
+| Mask IoU (true positives) | n/a |
+| Mask IoU (per GT, misses = 0) | n/a |
+| Macro P / R / F1 @ conf 0.25 (mask) | n/a |
+| Mask IoU (legacy, matched pairs only) | 0.7514 |
+| Evaluated on | val (legacy) |
 | Inference latency (ms/image, mean) | 61.0 |
 | Inference latency (ms/image, p95) | 66.6 |
 | Parameters (total) | 11,782,309 |
@@ -95,15 +111,17 @@ Trained on VehiDE (7 structural/cosmetic damage classes, incl. torn/punctured/mi
 
 ### Per-class
 
-| Class | Precision | Recall | Box AP50 | Mask AP50 |
-|---|---|---|---|---|
-| scratch | 0.1604 | 0.2487 | 0.2055 | 0.1604 |
-| dent | 0.1844 | 0.2623 | 0.1950 | 0.1844 |
-| torn | 0.1992 | 0.2939 | 0.2050 | 0.1992 |
-| broken_lamp | 0.3654 | 0.4672 | 0.4375 | 0.3654 |
-| missing_part | 0.5861 | 0.6496 | 0.5891 | 0.5861 |
-| punctured | 0.3664 | 0.4628 | 0.3711 | 0.3664 |
-| shattered_glass | 0.6732 | 0.7078 | 0.7074 | 0.6732 |
+| Class | Precision@0.25 | Recall@0.25 | F1@0.25 | Best-F1 conf | Box AP50 | Mask AP50 | Max recall |
+|---|---|---|---|---|---|---|---|
+| scratch | n/a | n/a | n/a | n/a | 0.2055 | 0.1604 | n/a |
+| dent | n/a | n/a | n/a | n/a | 0.1950 | 0.1844 | n/a |
+| torn | n/a | n/a | n/a | n/a | 0.2050 | 0.1992 | n/a |
+| broken_lamp | n/a | n/a | n/a | n/a | 0.4375 | 0.3654 | n/a |
+| missing_part | n/a | n/a | n/a | n/a | 0.5891 | 0.5861 | n/a |
+| punctured | n/a | n/a | n/a | n/a | 0.3711 | 0.3664 | n/a |
+| shattered_glass | n/a | n/a | n/a | n/a | 0.7074 | 0.6732 | n/a |
+
+Legacy metrics (schema v1): evaluated on the val split before the eval fixes; re-score with autoassess-eval for test-split numbers.
 
 ## Severity classifier
 

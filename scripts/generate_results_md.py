@@ -27,6 +27,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from autoassess.eval.compare import (  # noqa: E402
+    LEGACY_NOTICE,
+    headline_rows,
+    is_legacy,
+    per_class_table,
+)
 from autoassess.utils.logging import get_logger  # noqa: E402
 
 log = get_logger(__name__)
@@ -100,11 +106,7 @@ def render_detection_section(run_name: str, title: str, desc: str, m: dict[str, 
         "| Metric | Value |",
         "|---|---|",
         f"| Model | {m.get('model', 'n/a')} |",
-        f"| Box mAP@0.5 | {fmt(m['metrics']['box_map50'])} |",
-        f"| Box mAP@0.5:0.95 | {fmt(m['metrics']['box_map50_95'])} |",
-        f"| Mask mAP@0.5 | {fmt(m['metrics']['mask_map50'])} |",
-        f"| Mask mAP@0.5:0.95 | {fmt(m['metrics']['mask_map50_95'])} |",
-        f"| Mean mask IoU | {fmt(m['metrics']['mask_iou_mean'])} |",
+        *[f"| {label} | {value} |" for label, value in headline_rows(m)],
         f"| Inference latency (ms/image, mean) | {fmt(m['inference']['latency_ms_mean'], 1)} |",
         f"| Inference latency (ms/image, p95) | {fmt(m['inference']['latency_ms_p95'], 1)} |",
         f"| Parameters (total) | {m['model_info']['params_total']:,} |",
@@ -117,15 +119,11 @@ def render_detection_section(run_name: str, title: str, desc: str, m: dict[str, 
         "",
         "### Per-class",
         "",
-        "| Class | Precision | Recall | Box AP50 | Mask AP50 |",
-        "|---|---|---|---|---|",
+        *per_class_table(m),
+        "",
     ]
-    for name, pc in m["metrics"]["per_class"].items():
-        lines.append(
-            f"| {name} | {fmt(pc.get('precision'))} | {fmt(pc.get('recall'))} "
-            f"| {fmt(pc.get('box_ap50'))} | {fmt(pc.get('mask_ap50'))} |"
-        )
-    lines.append("")
+    if is_legacy(m):
+        lines += [LEGACY_NOTICE, ""]
     return "\n".join(lines)
 
 

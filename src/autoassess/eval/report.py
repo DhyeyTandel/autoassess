@@ -176,7 +176,7 @@ def per_image_mask_iou(
     coco_gt_dict: dict[str, Any], predictions: dict[str, ImagePrediction], iou_thr: float = 0.5
 ) -> dict[str, dict[str, Any]]:
     """Per-image mean matched-mask IoU (same greedy same-class matcher as
-    `autoassess.eval.metrics.mask_iou_mean`, scoped per image instead of
+    `autoassess.eval.metrics.greedy_match`, scoped per image instead of
     aggregated across the dataset), plus unmatched GT/DT counts.
 
     An image with predictions but zero GT-IoU matches gets score 0.0 (not

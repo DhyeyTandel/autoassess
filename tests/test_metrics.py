@@ -171,6 +171,6 @@ def test_run_coco_eval_end_to_end(synthetic_case: SyntheticCase) -> None:
         copy.deepcopy(synthetic_case.detections),
         synthetic_case.class_names,
     )
-    assert set(out) == {"box", "mask", "mask_iou_mean"}
-    assert 0.0 <= out["mask_iou_mean"] <= 1.0
+    assert "mask_iou_mean" not in out
+    assert 0.0 <= out["mask_iou_true_positives"] <= 1.0
     assert "precision" not in out["mask"]["per_class"]["dent"]

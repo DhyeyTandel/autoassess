@@ -567,9 +567,9 @@ def main() -> None:
         early_stopped=early_stopped,
         wall_time_seconds_total=total_wall_time,
         epoch_wall_times_seconds=epoch_times,
-        box_metrics=final_eval["box"],
-        mask_metrics=final_eval["mask"],
-        mask_iou=final_eval["mask_iou_mean"],
+        eval_result=final_eval,
+        eval_split="val",
+        scoring_conf=SCORING_CONF_THRESHOLD,
         inference=latency,
         model_info=model_info,
     )
