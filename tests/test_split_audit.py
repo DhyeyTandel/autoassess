@@ -129,3 +129,20 @@ def test_main_writes_only_under_reports_dir(
     assert list(cwd.iterdir()) == []
     # nothing written into the data dir
     assert not list(proc.rglob("*.md")) and not list(proc.rglob("pair_*"))
+
+
+def test_audit_split_reports_truncated_jpeg_as_unreadable(sa: ModuleType, tmp_path: Path) -> None:
+    root = _fake_processed(tmp_path / "ds")
+    good = tmp_path / "good.jpg"
+    _synthetic(300, size=256).save(good, format="JPEG", quality=95)
+    (root / "images" / "test" / "te_broken.jpg").write_bytes(good.read_bytes()[:200])
+    (root / "images" / "train" / "tr_broken.jpg").write_bytes(good.read_bytes()[:200])
+
+    res = sa.audit_split(root, threshold=6, top_k=30)
+    assert sorted(res.unreadable) == ["images/test/te_broken.jpg", "images/train/tr_broken.jpg"]
+    assert res.n_test == 3
+    assert res.n_train == 5
+    assert res.n_flagged == 1
+    assert sum(res.histogram) == 3
+    assert all(p.test.name != "te_broken.jpg" for p in res.pairs)
+    assert all(p.train.name != "tr_broken.jpg" for p in res.pairs)

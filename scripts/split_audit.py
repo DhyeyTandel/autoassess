@@ -58,11 +58,12 @@ class Pair:
 class AuditResult:
     """Outcome of auditing one dataset."""
 
-    n_train: int
-    n_test: int
+    n_train: int  # readable train images compared
+    n_test: int  # readable test images compared
     threshold: int
     n_flagged: int
     pct_flagged: float
+    unreadable: list[str]  # files that failed to hash, relative to the processed dir
     histogram: list[int]  # nearest-neighbour distance counts, index 0..64
     pairs: list[Pair]  # top_k closest, sorted by (distance, test name, train name)
 
@@ -106,14 +107,24 @@ def _list_images(directory: Path) -> list[Path]:
     )
 
 
-def _hash_all(paths: list[Path], label: str) -> npt.NDArray[np.uint64]:
-    hashes = np.empty(len(paths), dtype=np.uint64)
+def _hash_all(
+    paths: list[Path], label: str, root: Path
+) -> tuple[list[Path], npt.NDArray[np.uint64], list[str]]:
+    """Hash paths, skipping files PIL cannot read (OSError, incl. truncated/unidentified)."""
+    ok: list[Path] = []
+    values: list[int] = []
+    bad: list[str] = []
     step = max(1, len(paths) // 10)
     for i, p in enumerate(paths):
-        hashes[i] = np.uint64(phash(p))
+        try:
+            values.append(phash(p))
+            ok.append(p)
+        except OSError as exc:
+            log.warning("unreadable image %s (%s), excluded from audit", p, exc)
+            bad.append(p.relative_to(root).as_posix())
         if (i + 1) % step == 0 or i + 1 == len(paths):
             log.info("hashed %s %d/%d", label, i + 1, len(paths))
-    return hashes
+    return ok, np.array(values, dtype=np.uint64), bad
 
 
 def audit_split(processed_dir: Path, threshold: int = 6, top_k: int = 30) -> AuditResult:
@@ -122,11 +133,15 @@ def audit_split(processed_dir: Path, threshold: int = 6, top_k: int = 30) -> Aud
     The top_k list holds one pair per test image (its nearest train image),
     ranked closest first, so one test image cannot fill the list on its own.
     """
-    train_paths = _list_images(processed_dir / "images" / "train")
-    test_paths = _list_images(processed_dir / "images" / "test")
-    if not train_paths or not test_paths:
+    all_train = _list_images(processed_dir / "images" / "train")
+    all_test = _list_images(processed_dir / "images" / "test")
+    if not all_train or not all_test:
         raise ValueError(f"empty train or test images dir under {processed_dir}")
-    dist = hamming_matrix(_hash_all(test_paths, "test"), _hash_all(train_paths, "train"))
+    test_paths, test_hashes, bad_test = _hash_all(all_test, "test", processed_dir)
+    train_paths, train_hashes, bad_train = _hash_all(all_train, "train", processed_dir)
+    if not train_paths or not test_paths:
+        raise ValueError(f"no readable train or test images under {processed_dir}")
+    dist = hamming_matrix(test_hashes, train_hashes)
     nearest = dist.argmin(axis=1)
     nn_dist = dist[np.arange(len(test_paths)), nearest]
     histogram = np.bincount(nn_dist, minlength=65).tolist()
@@ -144,6 +159,7 @@ def audit_split(processed_dir: Path, threshold: int = 6, top_k: int = 30) -> Aud
         threshold=threshold,
         n_flagged=n_flagged,
         pct_flagged=100.0 * n_flagged / len(test_paths),
+        unreadable=bad_test + bad_train,
         histogram=histogram,
         pairs=pairs,
     )
@@ -186,8 +202,9 @@ def _section(name: str, result: AuditResult, figures: list[Path], reports_dir: P
         f"**Method:** phash (64-bit DCT), nearest train image per test image, "
         f"flagged when Hamming distance <= {result.threshold}.",
         "",
-        f"- Train images: {result.n_train}",
-        f"- Test images: {result.n_test}",
+        f"- Train images hashed: {result.n_train}",
+        f"- Test images hashed: {result.n_test}",
+        f"- Unreadable files excluded: {len(result.unreadable)}",
         f"- Test images with a train neighbour at distance <= {result.threshold}: "
         f"{result.n_flagged} ({result.pct_flagged:.1f}%)",
         "",
@@ -198,6 +215,9 @@ def _section(name: str, result: AuditResult, figures: list[Path], reports_dir: P
     ]
     for label, lo, hi in HIST_BINS:
         lines.append(f"| {label} | {sum(result.histogram[lo : hi + 1])} |")
+    if result.unreadable:
+        lines += ["", "Unreadable files (excluded from every count above):", ""]
+        lines += [f"- `{u}`" for u in result.unreadable]
     lines += [
         "",
         f"Top {len(result.pairs)} closest pairs:",
@@ -260,7 +280,11 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("skipping %s: train or test images missing/empty under %s", name, processed)
             continue
         log.info("auditing %s (%s)", name, processed)
-        result = audit_split(processed, threshold=args.threshold, top_k=args.top_k)
+        try:
+            result = audit_split(processed, threshold=args.threshold, top_k=args.top_k)
+        except ValueError as exc:
+            log.warning("skipping %s: %s", name, exc)
+            continue
         figures = write_figures(name, result, reports_dir)
         sections.append(_section(name, result, figures, reports_dir))
 
