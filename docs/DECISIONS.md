@@ -95,3 +95,28 @@ tidy earlier entries.
 - On the first 150 CarDD test images (431 damage instances), the share assigned to a part: 14.4% (IoU ≥ 0.10, conf 0.25) → 19.5% (coverage, conf 0.25) → 25.8% (coverage, conf 0.15).
 - About 74% still unassigned, mostly on panels with no class.
 - The assignment rate measures coverage, not accuracy: CarDD has no part ground truth, so correctness was only spot-checked by eye on two images.
+
+## [2026-10-05] Demo-only VehiDE cutoff 0.07 (high recall); lossless upload save
+
+**Problem** — The user wanted the demo to flag the hanging/detached front-right bumper on CarDD test `000042`. VehiDE scores it `missing_part` at 0.072, below the 0.15 secondary cutoff logged in the merge entry above. Once the cutoff was lowered, the demo still missed it, while the CLI did not.
+
+**Options considered**
+- Lower the demo's VehiDE cutoff to 0.07. Chosen by the user, knowing the precision cost.
+- Retrain VehiDE (longer, larger imgsz). Not chosen now: needs Colab GPU time and per-run approval, with no guarantee it fixes this image.
+- Retrain CarDD. Rejected: CarDD's ground truth never labels this bumper, so it cannot learn it.
+
+**Decision**
+- `app.py` default `SECONDARY_DAMAGE_CONF` is now 0.07, documented as a high-recall demo setting.
+- `autoassess-pipeline` keeps 0.15. This reverses the merge entry's default for the demo only.
+- `app.py` now saves uploads as RGB PNG to a per-request `tempfile.mkstemp` file, deleted in a `finally`. It previously wrote JPEG (PIL default quality 75) to a fixed `/tmp/autoassess_upload.jpg`.
+
+**Tradeoff accepted**
+- On VehiDE test, missing_part precision falls from 0.59 to about 0.45, and torn from 0.33 to about 0.20. Roughly half the extra VehiDE detections are false alarms; `000042` goes from 14 to 18 instances.
+- The cutoff sits 0.002 below this image's score, so it is tuned to one example and will flip on small pixel changes. That is a demo convenience, not a calibrated operating point.
+
+**What went wrong**
+- After lowering the cutoff, the live app still missed the bumper. Cause: the JPEG re-encode alone moved the score from 0.072 to 0.066 (q75; 0.067 at q95), while a lossless PNG re-save kept 0.072.
+- The same sensitivity runs the other way: after the PNG change, the parts model lost the bonnet on `000042` (it was at the 0.15 cutoff). The bonnet dent and scratch went back to "no part".
+- The fixed `/tmp` path also let concurrent requests overwrite each other's upload. A worker had flagged this earlier, and it was fixed in the same change.
+
+**Scale/limits** — Any detection within about 0.01 of a cutoff is unstable across re-encodes, resizes and phone-camera processing. This applies to the parts model at 0.15 as much as to VehiDE at 0.07. Uploads are still decoded in full and written once per request, which is fine for a single-user demo.
