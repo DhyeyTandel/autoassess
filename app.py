@@ -8,6 +8,10 @@ config-driven training script.
 
 Usage
 -----
+    python app.py                              # CarDD damage model (default)
+    DAMAGE_MODEL_SOURCE=vehide python app.py    # VehiDE damage model instead
+
+    # Or override weights/parts paths individually, same as before:
     DAMAGE_WEIGHTS=runs/yolov8_seg_v1/weights/best.pt \\
     PARTS_WEIGHTS=runs/parts_seg_v1/weights/best.pt \\
     python app.py
@@ -34,9 +38,27 @@ from autoassess.infer.pipeline import (
 
 pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.heif uploads
 
-DAMAGE_WEIGHTS = Path(os.environ.get("DAMAGE_WEIGHTS", "runs/yolov8_seg_v1/weights/best.pt"))
+# Two damage models exist — CarDD (6 classes, fully converged) and VehiDE (7
+# classes incl. torn/punctured/missing_part, which CarDD has no equivalent
+# for, but only trained to 48/50 epochs). Weights and dataset config must be
+# switched together — a weights/config mismatch would silently mislabel every
+# detection (wrong class count/names) rather than erroring, so both are keyed
+# off one env var instead of two independent ones.
+_DAMAGE_MODEL_SOURCES = {
+    "cardd": ("runs/yolov8_seg_v1/weights/best.pt", "configs/cardd.yaml"),
+    "vehide": ("runs/vehide_seg_v1/weights/best.pt", "configs/vehide.yaml"),
+}
+_damage_source = os.environ.get("DAMAGE_MODEL_SOURCE", "cardd")
+if _damage_source not in _DAMAGE_MODEL_SOURCES:
+    raise ValueError(
+        f"DAMAGE_MODEL_SOURCE={_damage_source!r} is not one of "
+        f"{sorted(_DAMAGE_MODEL_SOURCES)}."
+    )
+_default_damage_weights, _default_damage_dataset_config = _DAMAGE_MODEL_SOURCES[_damage_source]
+
+DAMAGE_WEIGHTS = Path(os.environ.get("DAMAGE_WEIGHTS", _default_damage_weights))
 PARTS_WEIGHTS = Path(os.environ.get("PARTS_WEIGHTS", "runs/parts_seg_v1/weights/best.pt"))
-DAMAGE_DATASET_CONFIG = Path("configs/cardd.yaml")
+DAMAGE_DATASET_CONFIG = Path(_default_damage_dataset_config)
 PARTS_DATASET_CONFIG = Path("configs/carparts.yaml")
 SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")

@@ -109,7 +109,13 @@ def run_yolo_coco_eval(
 
     detections: list[dict[str, Any]] = []
     for file_name, image_id in file_name_to_id.items():
-        result = eval_model.predict(str(images_dir / file_name), verbose=False)[0]
+        results = eval_model.predict(str(images_dir / file_name), verbose=False)
+        if not results:
+            # Ultralytics returns an empty list rather than raising when the image
+            # itself fails to decode (truncated/corrupt JPEG) — treat as zero
+            # detections for this image rather than crashing the whole eval run.
+            continue
+        result = results[0]
         if result.masks is None:
             continue
         height, width = result.orig_shape

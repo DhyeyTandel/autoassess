@@ -45,6 +45,14 @@ KNOWN_RUNS: dict[str, tuple[str, str]] = {
         "Part segmentation — YOLOv8-seg",
         "Trained on Carparts-Seg, remapped to 6 panel classes.",
     ),
+    "vehide_seg_v1": (
+        "Damage detection — YOLOv8-seg (VehiDE)",
+        "Trained on VehiDE (7 structural/cosmetic damage classes, incl. torn/"
+        "punctured/missing_part — types CarDD has no equivalent for). Evaluated "
+        "on the val split at epoch 48/50 — training crashed on Colab resuming "
+        "into epoch 49 after a runtime reset; see runs/vehide_seg_v1/results.csv "
+        "for the full 48-epoch training curve.",
+    ),
     "severity_v1": (
         "Severity classifier",
         "Two-branch ResNet-18, weak supervision from the heuristic grader.",
