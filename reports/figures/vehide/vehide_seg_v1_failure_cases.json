@@ -1,0 +1,94 @@
+{
+  "worst_scoreable": [
+    {
+      "file_name": "01022021_152737image952852.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "01102020_093303image200692.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "broken_lamp"
+      ]
+    },
+    {
+      "file_name": "02012020_081238image18283.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 3,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "02012020_084046image539008.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 3,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "02012020_084345image871964.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 5,
+      "n_dt": 2,
+      "n_matched": 0,
+      "predicted_classes": [
+        "torn",
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "02012020_084347image880583.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 1,
+      "n_matched": 0,
+      "predicted_classes": [
+        "scratch"
+      ]
+    },
+    {
+      "file_name": "02012020_084355image369012.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 2,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "02012020_085204image238444.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "02012020_085204image878161.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 1,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    },
+    {
+      "file_name": "02012020_085432image771696.jpg",
+      "mean_iou": 0.0,
+      "n_gt": 3,
+      "n_dt": 0,
+      "n_matched": 0,
+      "predicted_classes": []
+    }
+  ],
+  "unscoreable_zero_gt": []
+}
