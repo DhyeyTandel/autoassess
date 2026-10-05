@@ -8,11 +8,21 @@ config-driven training script.
 
 Usage
 -----
-    python app.py                              # CarDD damage model (default)
-    DAMAGE_MODEL_SOURCE=vehide python app.py    # VehiDE damage model instead
+    python app.py                               # merged: CarDD + VehiDE (default)
+    DAMAGE_MODEL_SOURCE=cardd python app.py     # CarDD damage model only
+    DAMAGE_MODEL_SOURCE=vehide python app.py    # VehiDE damage model only
 
-    # Or override weights/parts paths individually, same as before:
+    # Merged mode: CarDD is primary; VehiDE's extra classes (see the `merge:`
+    # section of configs/severity.yaml) are merged in. SECONDARY_DAMAGE_CONF
+    # (default 0.15) is the VehiDE confidence cutoff. 0.15 was chosen from a
+    # VehiDE test-split sweep: missing_part P0.59/R0.69 at 0.15 versus
+    # P0.37/R0.75 at 0.05, i.e. a much cleaner precision for a small recall cost.
+    SECONDARY_DAMAGE_CONF=0.25 python app.py
+
+    # Or override weights/parts paths individually (DAMAGE_WEIGHTS overrides only
+    # the primary model, SECONDARY_DAMAGE_WEIGHTS only the secondary):
     DAMAGE_WEIGHTS=runs/yolov8_seg_v1/weights/best.pt \\
+    SECONDARY_DAMAGE_WEIGHTS=runs/vehide_seg_v1/weights/best.pt \\
     PARTS_WEIGHTS=runs/parts_seg_v1/weights/best.pt \\
     python app.py
 """
@@ -20,6 +30,8 @@ Usage
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,23 +53,70 @@ pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.h
 # classes incl. torn/punctured/missing_part, which CarDD has no equivalent
 # for, but only trained to 48/50 epochs). Weights and dataset config must be
 # switched together — a weights/config mismatch would silently mislabel every
-# detection (wrong class count/names) rather than erroring, so both are keyed
-# off one env var instead of two independent ones.
-_DAMAGE_MODEL_SOURCES = {
-    "cardd": ("runs/yolov8_seg_v1/weights/best.pt", "configs/cardd.yaml"),
-    "vehide": ("runs/vehide_seg_v1/weights/best.pt", "configs/vehide.yaml"),
+# detection (wrong class count/names) rather than erroring, so each (weights,
+# config) pair is keyed off one env var instead of two independent ones. The
+# "merged" source runs CarDD as primary and VehiDE as secondary; each entry is
+# (primary_weights, primary_config, secondary_weights, secondary_config), with
+# the secondary pair None for single-model sources.
+_DAMAGE_MODEL_SOURCES: dict[str, tuple[str, str, str | None, str | None]] = {
+    "merged": (
+        "runs/yolov8_seg_v1/weights/best.pt",
+        "configs/cardd.yaml",
+        "runs/vehide_seg_v1/weights/best.pt",
+        "configs/vehide.yaml",
+    ),
+    "cardd": ("runs/yolov8_seg_v1/weights/best.pt", "configs/cardd.yaml", None, None),
+    "vehide": ("runs/vehide_seg_v1/weights/best.pt", "configs/vehide.yaml", None, None),
 }
-_damage_source = os.environ.get("DAMAGE_MODEL_SOURCE", "cardd")
-if _damage_source not in _DAMAGE_MODEL_SOURCES:
-    raise ValueError(
-        f"DAMAGE_MODEL_SOURCE={_damage_source!r} is not one of "
-        f"{sorted(_DAMAGE_MODEL_SOURCES)}."
-    )
-_default_damage_weights, _default_damage_dataset_config = _DAMAGE_MODEL_SOURCES[_damage_source]
+_DEFAULT_DAMAGE_SOURCE = "merged"
+_DEFAULT_SECONDARY_CONF = 0.15
 
-DAMAGE_WEIGHTS = Path(os.environ.get("DAMAGE_WEIGHTS", _default_damage_weights))
+
+@dataclass(frozen=True)
+class DamageModelSettings:
+    """Resolved damage-model choice; secondary fields are None for single-model sources."""
+
+    source: str
+    primary_weights: Path
+    primary_config: Path
+    secondary_weights: Path | None
+    secondary_config: Path | None
+    secondary_conf: float
+
+
+def resolve_damage_models(env: Mapping[str, str]) -> DamageModelSettings:
+    """Resolve damage-model settings from env-style vars (pure; no I/O).
+
+    Raises ValueError for an unknown DAMAGE_MODEL_SOURCE.
+    """
+    source = env.get("DAMAGE_MODEL_SOURCE", _DEFAULT_DAMAGE_SOURCE)
+    if source not in _DAMAGE_MODEL_SOURCES:
+        raise ValueError(
+            f"DAMAGE_MODEL_SOURCE={source!r} is not one of {sorted(_DAMAGE_MODEL_SOURCES)}."
+        )
+    p_weights, p_config, s_weights, s_config = _DAMAGE_MODEL_SOURCES[source]
+    secondary_weights: Path | None = None
+    secondary_config: Path | None = None
+    if s_weights is not None and s_config is not None:
+        secondary_weights = Path(env.get("SECONDARY_DAMAGE_WEIGHTS", s_weights))
+        secondary_config = Path(s_config)
+    return DamageModelSettings(
+        source=source,
+        primary_weights=Path(env.get("DAMAGE_WEIGHTS", p_weights)),
+        primary_config=Path(p_config),
+        secondary_weights=secondary_weights,
+        secondary_config=secondary_config,
+        secondary_conf=float(env.get("SECONDARY_DAMAGE_CONF", _DEFAULT_SECONDARY_CONF)),
+    )
+
+
+_damage_models = resolve_damage_models(os.environ)
+DAMAGE_WEIGHTS = _damage_models.primary_weights
+DAMAGE_DATASET_CONFIG = _damage_models.primary_config
+SECONDARY_DAMAGE_WEIGHTS = _damage_models.secondary_weights
+SECONDARY_DAMAGE_DATASET_CONFIG = _damage_models.secondary_config
+SECONDARY_DAMAGE_CONF = _damage_models.secondary_conf
 PARTS_WEIGHTS = Path(os.environ.get("PARTS_WEIGHTS", "runs/parts_seg_v1/weights/best.pt"))
-DAMAGE_DATASET_CONFIG = Path(_default_damage_dataset_config)
 PARTS_DATASET_CONFIG = Path("configs/carparts.yaml")
 SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")
@@ -130,10 +189,15 @@ def _rgb_hex(rgb: tuple[int, int, int]) -> str:
 def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
     if image is None:
         raise gr.Error("Upload an image first.")
-    if not DAMAGE_WEIGHTS.exists() or not PARTS_WEIGHTS.exists():
+    required = [DAMAGE_WEIGHTS, PARTS_WEIGHTS]
+    if SECONDARY_DAMAGE_WEIGHTS is not None:
+        required.append(SECONDARY_DAMAGE_WEIGHTS)
+    missing = [p for p in required if not p.exists()]
+    if missing:
         raise gr.Error(
-            f"Model weights not found (looked for {DAMAGE_WEIGHTS} and {PARTS_WEIGHTS}). "
-            "Set DAMAGE_WEIGHTS / PARTS_WEIGHTS env vars, or train the models first."
+            f"Model weights not found: {', '.join(str(p) for p in missing)}. "
+            "Set DAMAGE_WEIGHTS / SECONDARY_DAMAGE_WEIGHTS / PARTS_WEIGHTS env vars, "
+            "or train the models first."
         )
 
     image.convert("RGB").save(UPLOAD_TMP_PATH)
@@ -147,6 +211,10 @@ def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
         severity_config_path=SEVERITY_CONFIG,
         triage_config_path=SEVERITY_CONFIG,
         device=DEVICE,
+        secondary_damage_weights=SECONDARY_DAMAGE_WEIGHTS,
+        secondary_damage_dataset_config=SECONDARY_DAMAGE_DATASET_CONFIG,
+        secondary_damage_conf=SECONDARY_DAMAGE_CONF,
+        merge_config_path=SEVERITY_CONFIG if SECONDARY_DAMAGE_WEIGHTS is not None else None,
     )
 
     severities = [rec["severity"] for rec in result["instances"]]
