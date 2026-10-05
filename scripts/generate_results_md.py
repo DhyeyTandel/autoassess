@@ -54,8 +54,8 @@ KNOWN_RUNS: dict[str, tuple[str, str]] = {
     "vehide_seg_v1": (
         "Damage detection — YOLOv8-seg (VehiDE)",
         "Trained on VehiDE (7 structural/cosmetic damage classes, incl. torn/"
-        "punctured/missing_part — types CarDD has no equivalent for). Evaluated "
-        "on the val split at epoch 48/50 — training crashed on Colab resuming "
+        "punctured/missing_part — types CarDD has no equivalent for). Trained "
+        "to epoch 48/50 — training crashed on Colab resuming "
         "into epoch 49 after a runtime reset; see runs/vehide_seg_v1/results.csv "
         "for the full 48-epoch training curve.",
     ),
@@ -76,13 +76,49 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+EVAL_TEST_SUFFIX = "_eval_test"
+
+
 def load_all_metrics(runs_dir: Path) -> dict[str, dict[str, Any]]:
+    """Load ``runs/<name>/metrics.json`` for every real run.
+
+    Directories named ``*_eval_<split>`` hold standalone ``autoassess-eval``
+    re-scores, not runs of their own, so they are skipped here (see
+    ``resolve_run_metrics`` for how a re-score replaces its run's metrics).
+    """
     found = {}
     for metrics_path in sorted(runs_dir.glob("*/metrics.json")):
         run_name = metrics_path.parent.name
+        if "_eval_" in run_name:
+            continue
         with metrics_path.open("r", encoding="utf-8") as f:
             found[run_name] = json.load(f)
     return found
+
+
+def resolve_run_metrics(
+    runs_dir: Path, run_name: str, all_metrics: dict[str, dict[str, Any]]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(metrics, source)`` for a run, preferring a schema-v2
+    ``runs/<name>_eval_test/metrics.json`` (a test-split re-score of an older
+    run) over ``runs/<name>/metrics.json``. ``source`` is the path used, relative
+    to the runs dir's name (e.g. ``runs/<name>/metrics.json``), or None if the
+    run has no metrics."""
+    rescored = runs_dir / f"{run_name}{EVAL_TEST_SUFFIX}" / "metrics.json"
+    if rescored.is_file():
+        try:
+            with rescored.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            log.warning("Could not read %s; ignoring it.", rescored)
+        else:
+            if not is_legacy(data):
+                return data, f"{runs_dir.name}/{rescored.parent.name}/metrics.json"
+            log.warning("%s is not schema v2; ignoring it.", rescored)
+    m = all_metrics.get(run_name)
+    if m is None:
+        return None, None
+    return m, f"{runs_dir.name}/{run_name}/metrics.json"
 
 
 def fmt(value: Any, digits: int = 4) -> str:  # noqa: ANN401 — value may be float, int, str, bool, None
@@ -95,13 +131,21 @@ def fmt(value: Any, digits: int = 4) -> str:  # noqa: ANN401 — value may be fl
     return str(value)
 
 
-def render_detection_section(run_name: str, title: str, desc: str, m: dict[str, Any] | None) -> str:
+def render_detection_section(
+    run_name: str,
+    title: str,
+    desc: str,
+    m: dict[str, Any] | None,
+    source: str | None = None,
+) -> str:
     lines = [f"## {title}", "", desc, ""]
     if m is None:
         lines.append(f"_Pending — not yet trained (no `runs/{run_name}/metrics.json` found)._")
         lines.append("")
         return "\n".join(lines)
 
+    if source:
+        lines += [f"_Source: `{source}`_", ""]
     lines += [
         "| Metric | Value |",
         "|---|---|",
@@ -281,7 +325,8 @@ def main() -> None:
     for run_name, (title, desc) in KNOWN_RUNS.items():
         if run_name == "severity_v1":
             continue
-        sections.append(render_detection_section(run_name, title, desc, all_metrics.get(run_name)))
+        m, source = resolve_run_metrics(args.runs_dir, run_name, all_metrics)
+        sections.append(render_detection_section(run_name, title, desc, m, source))
 
     sections.append(render_severity_section(all_metrics.get("severity_v1"), args.figures_dir))
     sections.append(render_failure_analysis_section(args.figures_dir))

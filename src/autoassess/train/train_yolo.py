@@ -12,7 +12,9 @@ Wraps ``ultralytics.YOLO.train`` with:
   - early stopping on mask mAP50-95 specifically, since Ultralytics' own
     ``patience``/stopper uses a combined box+mask fitness score, not mask
     mAP50-95 alone
-  - a ``runs/<name>/metrics.json`` summary written at the end of training
+  - a ``runs/<name>/metrics.json`` written at the end of training by scoring the
+    selected checkpoint on the *test* split via ``autoassess.eval.evaluate``
+    (val is used only for checkpoint selection and early stopping)
 
 Usage
 -----
@@ -28,6 +30,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -39,16 +42,11 @@ from autoassess.data.augmentations import (
     DEFAULT_PERSPECTIVE_SCALE,
     build_phone_photo_augmentations,
 )
-from autoassess.eval.coco_eval import load_class_names
-from autoassess.eval.metrics import build_metrics_json, count_params, write_metrics_json
-from autoassess.eval.scoring import SCORING_CONF_THRESHOLD
+from autoassess.eval.evaluate import run_evaluation
 from autoassess.eval.yolo_eval import (
-    measure_yolo_latency,
     peak_vram_mb_for_yolo,
     reset_peak_vram_for_yolo,
     resolve_dataset_yaml_for_ultralytics,
-    resolve_processed_dir,
-    run_yolo_coco_eval,
 )
 from autoassess.utils.config import load_config, resolve_paths
 from autoassess.utils.logging import get_logger, setup_run_logging
@@ -143,6 +141,80 @@ def build_early_stopping_callback(patience: int, total_epochs: int) -> tuple[Any
     return _callback, state
 
 
+def report_on_test(
+    *,
+    model: str,
+    run_dir: Path,
+    dataset_config: Path,
+    imgsz: int,
+    device: str,
+    epochs: int,
+    batch: int,
+    patience: int,
+    best_epoch: int,
+    early_stopped: bool,
+    wall_time_seconds_total: float,
+    epoch_wall_times_seconds: list[float],
+    vram_peak_mb_training: float | None,
+) -> Path:
+    """Score the selected checkpoint on the **test** split and write
+    ``run_dir/metrics.json`` (schema v2) through the standalone evaluator.
+
+    Val is used only for checkpoint selection / early stopping during training;
+    it never feeds the reported numbers. Uses ``weights/best.pt``; if that is
+    missing (e.g. no validation ran) it falls back to ``weights/last.pt`` with
+    a warning. ``params_total`` / ``params_trainable`` come from the evaluator
+    (which restores grad flags on the reloaded Ultralytics checkpoint), so they
+    are not passed here. ``model`` is the starting model name (``args.model``)
+    recorded as ``model`` in metrics.json.
+    """
+    weights_dir = run_dir / "weights"
+    weights = weights_dir / "best.pt"
+    if not weights.exists():
+        weights = weights_dir / "last.pt"
+        log.warning("best.pt not found in %s; reporting on last.pt instead.", weights_dir)
+
+    training_info: dict[str, Any] = {
+        "epochs_requested": epochs,
+        "epochs_run_this_invocation": len(epoch_wall_times_seconds),
+        "batch": batch,
+        "patience": patience,
+        "best_epoch": best_epoch,
+        "early_stopped": early_stopped,
+        "wall_time_seconds_total": wall_time_seconds_total,
+        "epoch_wall_times_seconds": epoch_wall_times_seconds,
+        "vram_peak_mb_training": vram_peak_mb_training,
+    }
+    metrics_path = run_evaluation(
+        weights=weights,
+        model_type="yolo",
+        dataset_config=dataset_config,
+        split="test",
+        output_dir=run_dir,
+        device=device,
+        imgsz=imgsz,
+        training_info=training_info,
+        configure_logging=False,
+        model_type_label="yolov8-seg",
+        model_id=model,
+    )
+    _log_headline(metrics_path)
+    return metrics_path
+
+
+def _log_headline(metrics_path: Path) -> None:
+    try:
+        m = json.loads(metrics_path.read_text(encoding="utf-8"))["metrics"]
+    except (OSError, ValueError, KeyError):
+        log.warning("Could not read headline metrics back from %s", metrics_path)
+        return
+    log.info(
+        "Test-split metrics written to %s | mask mAP50=%.4f mAP50-95=%.4f | "
+        "box mAP50=%.4f mAP50-95=%.4f",
+        metrics_path, m["mask_map50"], m["mask_map50_95"], m["box_map50"], m["box_map50_95"],
+    )
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -186,6 +258,9 @@ def main() -> None:
     model.add_callback("on_train_epoch_start", _on_epoch_start)
     model.add_callback("on_train_epoch_end", _on_epoch_end)
 
+    # Training-time VRAM: reset right before training, read right after it ends
+    # (before the test-split evaluation, which measures its own inference peak).
+    reset_peak_vram_for_yolo(args.device)
     train_start = time.monotonic()
     results = model.train(
         data=dataset_yaml,
@@ -205,62 +280,25 @@ def main() -> None:
         perspective=DEFAULT_PERSPECTIVE_SCALE,  # viewpoint warp — simulates off-angle phone photos
     )
     total_wall_time = time.monotonic() - train_start
-    del results  # Ultralytics' own results_dict isn't used — see run_yolo_coco_eval below
+    vram_peak_mb_training = peak_vram_mb_for_yolo(args.device)
+    del results  # Ultralytics' own results_dict isn't used; the evaluator re-scores best.pt
 
-    class_names = load_class_names(args.dataset_config)
-    processed_dir = resolve_processed_dir(args.dataset_config)
-    best_weights = run_dir / "weights" / "best.pt"
-    eval_model = YOLO(str(best_weights)) if best_weights.exists() else model
-
-    device = args.device if args.device != "cpu" else "cpu"
-    reset_peak_vram_for_yolo(device)
-
-    final_eval = run_yolo_coco_eval(
-        eval_model, processed_dir / "images" / "val", processed_dir / "labels" / "val", class_names
-    )
-    latency = measure_yolo_latency(eval_model, processed_dir / "images" / "val", args.imgsz)
-
-    # Ultralytics replaces `model.model` with a freshly-loaded inference checkpoint
-    # the moment `.train()` returns (engine/model.py: `self.model, self.ckpt =
-    # load_checkpoint(ckpt)`), and that reload sets requires_grad=False on every
-    # param — there is no way to reach the live training-mode module afterwards.
-    # That's an artifact of checkpoint loading, not an architectural freeze (unlike
-    # e.g. a genuinely frozen backbone), so restore grad flags before counting —
-    # every param actually was trainable during the run just completed, and Mask
-    # R-CNN's count is taken from its live training-mode model, so this keeps the
-    # two comparable rather than reporting a misleading params_trainable=0 for YOLO.
-    training_module = model.model
-    assert isinstance(training_module, torch.nn.Module)
-    for p in training_module.parameters():
-        p.requires_grad_(True)
-    model_info = {
-        **count_params(training_module),
-        "vram_peak_mb": peak_vram_mb_for_yolo(device),
-    }
-
-    payload = build_metrics_json(
-        run_name=args.name,
-        model_type="yolov8-seg",
+    metrics_path = report_on_test(
         model=args.model,
-        class_names=class_names,
-        epochs_requested=args.epochs,
-        epochs_run_this_invocation=len(epoch_times),
-        batch=args.batch,
+        run_dir=run_dir,
+        dataset_config=args.dataset_config,
         imgsz=args.imgsz,
         device=args.device,
+        epochs=args.epochs,
+        batch=args.batch,
         patience=args.patience,
         best_epoch=early_stop_state["best_epoch"],
         early_stopped=early_stop_state["no_improve"] >= args.patience,
         wall_time_seconds_total=total_wall_time,
         epoch_wall_times_seconds=epoch_times,
-        eval_result=final_eval,
-        eval_split="val",
-        scoring_conf=SCORING_CONF_THRESHOLD,
-        inference=latency,
-        model_info=model_info,
+        vram_peak_mb_training=vram_peak_mb_training,
     )
-    metrics_path = write_metrics_json(run_dir, payload)
-    log.info("Training complete. Metrics written to %s", metrics_path)
+    log.info("Training complete. Test-split metrics written to %s", metrics_path)
 
 
 class ResumeError(Exception):

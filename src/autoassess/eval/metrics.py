@@ -16,7 +16,7 @@ without framework-specific branching:
         "epochs_run_this_invocation": int,
         "batch": int,
         "imgsz": int,
-        "device": str,
+        "device": str,                         # device that was requested
         "patience": int,
         "best_epoch": int,
         "early_stopped": bool,
@@ -60,7 +60,10 @@ without framework-specific branching:
         "model_info": {
             "params_total": int,
             "params_trainable": int,
-            "vram_peak_mb": float | null   # null on non-CUDA devices (no peak-memory API)
+            "vram_peak_mb": float | null,  # null on non-CUDA devices (no peak-memory API)
+            "vram_scope": "inference",     # what vram_peak_mb covers (absent in older files)
+            "device_name": str,            # e.g. the CUDA device name, or "cpu"
+            "vram_peak_mb_training": float | null   # peak over the training run, if known
         }
     }
 """

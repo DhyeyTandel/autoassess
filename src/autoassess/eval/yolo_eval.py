@@ -99,27 +99,33 @@ def collect_yolo_detections(
     images_dir: Path,
     coco_gt_dict: dict[str, Any],
     imgsz: int = 640,
+    device: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run `eval_model` over every image in `coco_gt_dict` and return
     COCO-format detections.
 
     Inference uses the scoring settings (`SCORING_CONF_THRESHOLD`,
     `SCORING_MAX_DETS`) so the full PR curve reaches pycocotools, and the
-    same `imgsz` as latency measurement.
+    same `imgsz` as latency measurement. `device` (Ultralytics convention:
+    '0', 'cpu', 'mps') is forwarded to `predict` when not None; otherwise
+    Ultralytics picks its own default device.
     """
     from pycocotools import mask as mask_utils
 
     file_name_to_id = {img["file_name"]: img["id"] for img in coco_gt_dict["images"]}
 
+    predict_kwargs: dict[str, Any] = {
+        "conf": SCORING_CONF_THRESHOLD,
+        "max_det": SCORING_MAX_DETS,
+        "imgsz": imgsz,
+        "verbose": False,
+    }
+    if device is not None:
+        predict_kwargs["device"] = device
+
     detections: list[dict[str, Any]] = []
     for file_name, image_id in file_name_to_id.items():
-        results = eval_model.predict(
-            str(images_dir / file_name),
-            conf=SCORING_CONF_THRESHOLD,
-            max_det=SCORING_MAX_DETS,
-            imgsz=imgsz,
-            verbose=False,
-        )
+        results = eval_model.predict(str(images_dir / file_name), **predict_kwargs)
         if not results:
             # Ultralytics returns an empty list rather than raising when the image
             # itself fails to decode (truncated/corrupt JPEG) — treat as zero
@@ -152,6 +158,7 @@ def run_yolo_coco_eval(
     labels_dir: Path,
     class_names: list[str],
     imgsz: int = 640,
+    device: str | None = None,
 ) -> dict[str, Any]:
     """Run inference over every image in `images_dir` and score the
     predictions against COCO ground truth reconstructed from the converted
@@ -162,7 +169,7 @@ def run_yolo_coco_eval(
     `autoassess.eval.scoring`), not Ultralytics' default conf=0.25.
     """
     coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names)
-    detections = collect_yolo_detections(eval_model, images_dir, coco_gt_dict, imgsz)
+    detections = collect_yolo_detections(eval_model, images_dir, coco_gt_dict, imgsz, device)
     return run_coco_eval(coco_gt_dict, detections, class_names)
 
 
@@ -176,7 +183,11 @@ def polygon_xy_to_rle(poly_xy: np.ndarray, width: int, height: int) -> dict[str,
 
 
 def measure_yolo_latency(
-    eval_model: Any, images_dir: Path, imgsz: int, n_images: int = 30  # noqa: ANN401
+    eval_model: Any,  # noqa: ANN401
+    images_dir: Path,
+    imgsz: int,
+    n_images: int = 30,
+    device: str | None = None,
 ) -> dict[str, float]:
     image_paths = sorted(
         [*images_dir.glob("*.jpg"), *images_dir.glob("*.png")]
@@ -185,6 +196,9 @@ def measure_yolo_latency(
     def _predict(image_path: Path) -> None:
         # Latency is measured at the deployment operating point (conf=0.25),
         # not the near-zero scoring threshold, which would inflate NMS cost.
-        eval_model.predict(str(image_path), imgsz=imgsz, conf=OPERATING_CONF, verbose=False)
+        kwargs: dict[str, Any] = {"imgsz": imgsz, "conf": OPERATING_CONF, "verbose": False}
+        if device is not None:
+            kwargs["device"] = device
+        eval_model.predict(str(image_path), **kwargs)
 
     return measure_inference_latency(_predict, image_paths)

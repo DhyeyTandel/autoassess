@@ -30,7 +30,11 @@ class _Arr:
 class _FakeYolo:
     """Records every predict call; returns one box-shaped mask per call."""
 
-    def __init__(self, events: list[str] | None = None) -> None:
+    def __init__(
+        self, events: list[str] | None = None, ckpt: dict[str, Any] | None = None
+    ) -> None:
+        if ckpt is not None:
+            self.ckpt = ckpt
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.events = events if events is not None else []
         self.model = torch.nn.Linear(3, 2)
@@ -291,3 +295,92 @@ def test_maskrcnn_end_to_end(tmp_path: Path, dataset: Path) -> None:
     assert data["inference"]["n_images"] == 1
     assert data["model_info"]["vram_scope"] == "inference"
     assert data["model_info"]["params_total"] > 0
+
+
+def test_output_dir_overrides_default_location(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo())
+    target = tmp_path / "trainer_run"
+
+    path = _run(tmp_path, dataset, output_dir=target)
+
+    assert path == target / "metrics.json"
+    assert json.loads(path.read_text())["eval_split"] == "test"
+    assert not (tmp_path / "out" / "exp1_eval_test").exists()
+
+
+def test_configure_logging_false_skips_setup_run_logging(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo())
+    calls: list[Path] = []
+    monkeypatch.setattr(evaluate, "setup_run_logging", lambda run_dir: calls.append(run_dir))
+
+    weights = _weights(tmp_path)
+    _run(tmp_path, dataset, weights=weights, configure_logging=False)
+    assert calls == []
+
+    _run(tmp_path, dataset, weights=weights)
+    assert calls == [tmp_path / "out" / "exp1_eval_test"]
+
+
+def test_yolo_device_reaches_every_predict_call(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeYolo()
+    _patch_yolo(monkeypatch, fake)
+
+    _run(tmp_path, dataset, device="cpu")
+
+    assert len(fake.calls) >= 4  # 2 scoring + latency (warmup included)
+    assert all(kw["device"] == "cpu" for _, kw in fake.calls)
+
+
+def test_yolo_device_omitted_when_none(tmp_path: Path, dataset: Path) -> None:
+    from autoassess.eval.coco_eval import build_coco_ground_truth
+    from autoassess.eval.yolo_eval import (
+        collect_yolo_detections,
+        measure_yolo_latency,
+    )
+
+    images = tmp_path / "processed" / "images" / "test"
+    labels = tmp_path / "processed" / "labels" / "test"
+    gt = build_coco_ground_truth(images, labels, CLASS_NAMES)
+    fake = _FakeYolo()
+
+    collect_yolo_detections(fake, images, gt)
+    measure_yolo_latency(fake, images, 64, n_images=1)
+
+    assert fake.calls and all("device" not in kw for _, kw in fake.calls)
+
+
+def test_yolo_model_id_from_checkpoint_train_args(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ckpt = {"train_args": {"model": "some/dir/yolov8n-seg.pt"}}
+    _patch_yolo(monkeypatch, _FakeYolo(ckpt=ckpt))
+    data = json.loads(_run(tmp_path, dataset).read_text())
+    assert data["model"] == "yolov8n-seg.pt"
+    assert data["model_type"] == "yolov8-seg"
+
+
+def test_yolo_model_id_falls_back_to_weights_name(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weights = _weights(tmp_path)
+    _patch_yolo(monkeypatch, _FakeYolo())  # no ckpt attribute
+    assert json.loads(_run(tmp_path, dataset, weights=weights).read_text())["model"] == "best.pt"
+    _patch_yolo(monkeypatch, _FakeYolo(ckpt={"train_args": {}}))  # no model recorded
+    assert json.loads(_run(tmp_path, dataset, weights=weights).read_text())["model"] == "best.pt"
+
+
+def test_label_overrides(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo(ckpt={"train_args": {"model": "a.pt"}}))
+    data = json.loads(
+        _run(tmp_path, dataset, model_type_label="yolov8-seg-parts", model_id="b.pt").read_text()
+    )
+    assert data["model_type"] == "yolov8-seg-parts"
+    assert data["model"] == "b.pt"

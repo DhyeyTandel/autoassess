@@ -2,7 +2,8 @@
 
 Scores any trained checkpoint (Ultralytics YOLO-seg or torchvision Mask R-CNN)
 on one split of a processed dataset with the same pipeline the trainers use,
-and writes a schema-v2 ``metrics.json`` to ``<output_root>/<name>_eval_<split>/``.
+and writes a schema-v2 ``metrics.json`` to ``<output_root>/<name>_eval_<split>/``
+(or to ``output_dir/metrics.json`` when the trainers call it, see ``run_evaluation``).
 Training-time fields are carried over read-only from ``<weights run dir>/metrics.json``
 (or the ``training_info`` argument); peak VRAM is measured over inference only.
 
@@ -95,6 +96,17 @@ def _load_maskrcnn(weights: Path, num_classes: int, device: torch.device) -> tor
     return model.to(device)
 
 
+def _yolo_model_id(eval_model: Any, weights: Path) -> str:  # noqa: ANN401
+    """Original model basename recorded in the checkpoint's ``train_args["model"]``
+    (e.g. ``yolov8n-seg.pt``), else the weights file name."""
+    ckpt = getattr(eval_model, "ckpt", None)
+    if isinstance(ckpt, dict):
+        train_args = ckpt.get("train_args")
+        if isinstance(train_args, dict) and train_args.get("model"):
+            return Path(str(train_args["model"])).name
+    return weights.name
+
+
 def _resolve_device(device: str) -> torch.device:
     if device == "cpu":
         return torch.device("cpu")
@@ -164,6 +176,10 @@ def run_evaluation(
     latency_images: int = 30,
     training_info: dict[str, Any] | None = None,
     seed: int = DEFAULT_SEED,
+    output_dir: Path | None = None,
+    configure_logging: bool = True,
+    model_type_label: str | None = None,
+    model_id: str | None = None,
 ) -> Path:
     """Evaluate ``weights`` on ``split`` and write metrics.json; return its path.
 
@@ -172,13 +188,22 @@ def run_evaluation(
     come from ``training_info`` if given, else from the sibling run's
     metrics.json (read-only), else are None. ``vram_peak_mb`` covers inference
     only (reset after model load, read after scoring and latency).
+
+    ``output_dir``, when set, replaces ``<output_root>/<run_name>_eval_<split>``
+    as the directory metrics.json is written to (trainers pass their own run
+    dir). ``model_type_label`` / ``model_id`` override the ``model_type`` and
+    ``model`` fields of metrics.json (defaults: ``yolov8-seg`` / ``maskrcnn`` and,
+    for YOLO, the model recorded in the checkpoint's train_args else the weights
+    file name; for Mask R-CNN the architecture id). ``configure_logging=False``
+    skips ``setup_run_logging`` so a caller that already set up its own log file keeps it.
     """
     if model_type not in ("yolo", "maskrcnn"):
         raise ValueError(f"model_type must be 'yolo' or 'maskrcnn', got {model_type!r}")
 
     name = run_name or _default_run_name(weights)
-    run_dir = output_root / f"{name}_eval_{split}"
-    setup_run_logging(run_dir)
+    run_dir = output_dir if output_dir is not None else output_root / f"{name}_eval_{split}"
+    if configure_logging:
+        setup_run_logging(run_dir)
     seed_everything(seed)
 
     class_names = load_class_names(dataset_config)
@@ -197,8 +222,8 @@ def run_evaluation(
     )
 
     if model_type == "yolo":
-        model_id = weights.name
         eval_model = _load_yolo(weights)
+        default_model_id = _yolo_model_id(eval_model, weights)
         module = eval_model.model
         assert isinstance(module, torch.nn.Module)
         # Ultralytics' checkpoint loader sets requires_grad=False on every param;
@@ -208,14 +233,16 @@ def run_evaluation(
 
         reset_peak_vram(torch_device)
         eval_result = run_yolo_coco_eval(
-            eval_model, images_dir, labels_dir, class_names, imgsz=imgsz
+            eval_model, images_dir, labels_dir, class_names, imgsz=imgsz, device=device
         )
-        latency = measure_yolo_latency(eval_model, images_dir, imgsz, n_images=latency_images)
+        latency = measure_yolo_latency(
+            eval_model, images_dir, imgsz, n_images=latency_images, device=device
+        )
         model_type_field = YOLO_MODEL_TYPE
     else:
         from autoassess.train.train_maskrcnn import CarDDSegmentationDataset, evaluate_split
 
-        model_id = MASKRCNN_MODEL_ID
+        default_model_id = MASKRCNN_MODEL_ID
         module = _load_maskrcnn(weights, len(class_names), torch_device)
         dataset = CarDDSegmentationDataset(images_dir, labels_dir, imgsz=imgsz, augment=False)
 
@@ -247,8 +274,8 @@ def run_evaluation(
 
     payload = build_metrics_json(
         run_name=name,
-        model_type=model_type_field,
-        model=model_id,
+        model_type=model_type_label or model_type_field,
+        model=model_id or default_model_id,
         class_names=class_names,
         epochs_requested=train_fields.get("epochs_requested"),
         epochs_run_this_invocation=train_fields.get("epochs_run_this_invocation"),
@@ -305,6 +332,10 @@ def parse_args() -> argparse.Namespace:
                    help="Input image size (default: 640).")
     p.add_argument("--latency-images", type=int, default=30,
                    help="Number of images used to measure latency (default: 30).")
+    p.add_argument("--model-type-label", type=str, default=None,
+                   help="Override the label written to metrics.json as model_type.")
+    p.add_argument("--model-id", type=str, default=None,
+                   help="Override the label written to metrics.json as model.")
     return p.parse_args()
 
 
@@ -326,6 +357,8 @@ def main() -> None:
         imgsz=args.imgsz,
         latency_images=args.latency_images,
         seed=seed,
+        model_type_label=args.model_type_label,
+        model_id=args.model_id,
     )
 
 

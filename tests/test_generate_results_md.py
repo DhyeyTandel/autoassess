@@ -71,3 +71,92 @@ def test_generate_results_md_v2_and_v1(
     assert cells[1:5] == ["n/a"] * 4
     assert cells[6] == f"{V1_PRECISION:.4f}"  # only as Mask AP50
     assert "0.9911" not in v1_sec
+
+
+def _generate(
+    tmp_path: Path, runs: Path, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    out = tmp_path / "out" / "results.md"
+    mod = _load_script()
+    monkeypatch.setattr(
+        sys, "argv",
+        ["generate_results_md.py", "--runs-dir", str(runs), "--out", str(out),
+         "--figures-dir", str(tmp_path / "figs")],
+    )
+    mod.main()
+    return out.read_text(encoding="utf-8")
+
+
+def test_prefers_eval_test_dir_and_shows_source(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    (runs / "maskrcnn_v1").mkdir(parents=True)
+    (runs / "maskrcnn_v1" / "metrics.json").write_text(
+        json.dumps(make_v1("maskrcnn_v1")), encoding="utf-8"
+    )
+    write_metrics_json(
+        runs / "maskrcnn_v1_eval_test", make_v2(synthetic_case, "maskrcnn_v1")
+    )
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    sec = _section(md, "Damage detection — Mask R-CNN")
+    assert LEGACY_NOTICE not in sec
+    assert "| Evaluated on | test |" in sec
+    assert "_Source: `runs/maskrcnn_v1_eval_test/metrics.json`_" in sec
+    assert "## Other runs found" not in md
+    assert "maskrcnn_v1_eval_test" not in md.split("## Failure case analysis")[-1]
+
+
+def test_falls_back_to_run_metrics_without_eval_dir(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    sec = _section(md, "Damage detection — YOLOv8-seg")
+    assert "_Source: `runs/yolov8_seg_v1/metrics.json`_" in sec
+    assert "_eval_test" not in sec
+
+
+def test_legacy_eval_test_dir_is_ignored(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+    (runs / "yolov8_seg_v1_eval_test").mkdir(parents=True)
+    (runs / "yolov8_seg_v1_eval_test" / "metrics.json").write_text(
+        json.dumps(make_v1("yolov8_seg_v1")), encoding="utf-8"
+    )
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    sec = _section(md, "Damage detection — YOLOv8-seg")
+    assert "_Source: `runs/yolov8_seg_v1/metrics.json`_" in sec
+    assert LEGACY_NOTICE not in sec
+
+
+def test_eval_dirs_not_listed_as_other_runs(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+    write_metrics_json(
+        runs / "orphan_eval_test", make_v2(synthetic_case, "orphan")
+    )
+    write_metrics_json(runs / "other_run", make_v2(synthetic_case, "other_run"))
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    tail = md[md.index("## Other runs found"):]
+    assert "`other_run`" in tail
+    assert "orphan_eval_test" not in tail
+
+
+def test_vehide_description_does_not_claim_a_split() -> None:
+    desc = _load_script().KNOWN_RUNS["vehide_seg_v1"][1]
+    assert "Trained to epoch 48/50" in desc
+    assert "val split" not in desc
