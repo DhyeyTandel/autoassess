@@ -404,16 +404,16 @@ def build_metrics_json(
     model_type: str,
     model: str,
     class_names: list[str],
-    epochs_requested: int,
-    epochs_run_this_invocation: int,
-    batch: int,
+    epochs_requested: int | None,
+    epochs_run_this_invocation: int | None,
+    batch: int | None,
     imgsz: int,
     device: str,
-    patience: int,
-    best_epoch: int,
-    early_stopped: bool,
-    wall_time_seconds_total: float,
-    epoch_wall_times_seconds: list[float],
+    patience: int | None,
+    best_epoch: int | None,
+    early_stopped: bool | None,
+    wall_time_seconds_total: float | None,
+    epoch_wall_times_seconds: list[float] | None,
     eval_result: dict[str, Any],
     eval_split: str,
     scoring_conf: float,
@@ -424,6 +424,9 @@ def build_metrics_json(
 
     ``eval_result`` is the output of ``coco_eval.run_coco_eval``. Per-class
     precision/recall/F1/TP/FP/FN are the mask values at the operating point.
+    The training fields (epochs, batch, patience, best_epoch, early_stopped,
+    wall times) may be None for a standalone evaluation of weights whose
+    training history is unknown.
     """
     op = eval_result["operating_point"]
     mask_op = op["mask"]["per_class"]
