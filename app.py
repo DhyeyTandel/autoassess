@@ -14,9 +14,14 @@ Usage
 
     # Merged mode: CarDD is primary; VehiDE's extra classes (see the `merge:`
     # section of configs/severity.yaml) are merged in. SECONDARY_DAMAGE_CONF
-    # (default 0.15) is the VehiDE confidence cutoff. 0.15 was chosen from a
-    # VehiDE test-split sweep: missing_part P0.59/R0.69 at 0.15 versus
-    # P0.37/R0.75 at 0.05, i.e. a much cleaner precision for a small recall cost.
+    # (default 0.07) is the VehiDE confidence cutoff. 0.07 is an explicit
+    # high-recall demo setting: at 0.15 the demo misses a hanging/detached front
+    # bumper on CarDD test image 000042, which VehiDE detects as missing_part at
+    # 0.07. The cost is precision on VehiDE's test split (missing_part P 0.59 ->
+    # ~0.45, torn P 0.33 -> ~0.20); roughly half the extra VehiDE detections are
+    # false alarms. This favours not missing damage. `autoassess-pipeline` keeps
+    # its own 0.15 default; SECONDARY_DAMAGE_CONF=0.15 restores the
+    # precision-leaning setting here.
     SECONDARY_DAMAGE_CONF=0.25 python app.py
 
     # Or override weights/parts paths individually (DAMAGE_WEIGHTS overrides only
@@ -30,6 +35,7 @@ Usage
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,7 +75,7 @@ _DAMAGE_MODEL_SOURCES: dict[str, tuple[str, str, str | None, str | None]] = {
     "vehide": ("runs/vehide_seg_v1/weights/best.pt", "configs/vehide.yaml", None, None),
 }
 _DEFAULT_DAMAGE_SOURCE = "merged"
-_DEFAULT_SECONDARY_CONF = 0.15
+_DEFAULT_SECONDARY_CONF = 0.07
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,6 @@ PARTS_WEIGHTS = Path(os.environ.get("PARTS_WEIGHTS", "runs/parts_seg_v1/weights/
 PARTS_DATASET_CONFIG = Path("configs/carparts.yaml")
 SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")
-UPLOAD_TMP_PATH = Path("/tmp/autoassess_upload.jpg")
 
 TRIAGE_META = {
     AUTO_APPROVE: {"label": "Auto-approve", "hex": "#2f9e58", "glyph": "check"},
@@ -186,6 +191,23 @@ def _rgb_hex(rgb: tuple[int, int, int]) -> str:
     return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
+def save_upload_lossless(image: Image.Image, directory: Path | None = None) -> Path:
+    """Write `image` as RGB PNG to a unique temp file and return its path.
+
+    Lossless on purpose: a JPEG re-encode shifts low-confidence scores enough to
+    drop borderline detections. The caller owns (and must delete) the file.
+    """
+    fd, name = tempfile.mkstemp(suffix=".png", dir=directory)
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            image.convert("RGB").save(fh, format="PNG")
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
 def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
     if image is None:
         raise gr.Error("Upload an image first.")
@@ -200,22 +222,24 @@ def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
             "or train the models first."
         )
 
-    image.convert("RGB").save(UPLOAD_TMP_PATH)
-
-    result, damage_instances, part_instances = run_pipeline_with_masks(
-        source=UPLOAD_TMP_PATH,
-        damage_weights=DAMAGE_WEIGHTS,
-        parts_weights=PARTS_WEIGHTS,
-        damage_dataset_config=DAMAGE_DATASET_CONFIG,
-        parts_dataset_config=PARTS_DATASET_CONFIG,
-        severity_config_path=SEVERITY_CONFIG,
-        triage_config_path=SEVERITY_CONFIG,
-        device=DEVICE,
-        secondary_damage_weights=SECONDARY_DAMAGE_WEIGHTS,
-        secondary_damage_dataset_config=SECONDARY_DAMAGE_DATASET_CONFIG,
-        secondary_damage_conf=SECONDARY_DAMAGE_CONF,
-        merge_config_path=SEVERITY_CONFIG if SECONDARY_DAMAGE_WEIGHTS is not None else None,
-    )
+    upload_path = save_upload_lossless(image)
+    try:
+        result, damage_instances, part_instances = run_pipeline_with_masks(
+            source=upload_path,
+            damage_weights=DAMAGE_WEIGHTS,
+            parts_weights=PARTS_WEIGHTS,
+            damage_dataset_config=DAMAGE_DATASET_CONFIG,
+            parts_dataset_config=PARTS_DATASET_CONFIG,
+            severity_config_path=SEVERITY_CONFIG,
+            triage_config_path=SEVERITY_CONFIG,
+            device=DEVICE,
+            secondary_damage_weights=SECONDARY_DAMAGE_WEIGHTS,
+            secondary_damage_dataset_config=SECONDARY_DAMAGE_DATASET_CONFIG,
+            secondary_damage_conf=SECONDARY_DAMAGE_CONF,
+            merge_config_path=SEVERITY_CONFIG if SECONDARY_DAMAGE_WEIGHTS is not None else None,
+        )
+    finally:
+        upload_path.unlink(missing_ok=True)
 
     severities = [rec["severity"] for rec in result["instances"]]
     parts_assigned = [rec["part"] for rec in result["instances"]]
