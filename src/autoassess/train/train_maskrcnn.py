@@ -49,6 +49,7 @@ from autoassess.eval.metrics import (
     reset_peak_vram,
     write_metrics_json,
 )
+from autoassess.eval.scoring import SCORING_CONF_THRESHOLD, SCORING_MAX_DETS
 from autoassess.utils.config import load_config, resolve_paths
 from autoassess.utils.logging import get_logger, setup_run_logging
 from autoassess.utils.seed import seed_everything
@@ -248,7 +249,13 @@ def collate_fn(
     return list(images), list(targets)
 
 
-def build_model(num_classes_with_background: int) -> torch.nn.Module:
+def build_model(num_classes_with_background: int, pretrained: bool = True) -> torch.nn.Module:
+    """Build Mask R-CNN with heads sized for `num_classes_with_background`.
+
+    The model's own box_score_thresh / box_detections_per_img are set to the
+    scoring values so torchvision's internal 0.05 filter does not truncate
+    the PR curve. `pretrained=False` skips weight downloads (offline tests).
+    """
     from torchvision.models.detection import (
         MaskRCNN_ResNet50_FPN_V2_Weights,
         maskrcnn_resnet50_fpn_v2,
@@ -256,7 +263,19 @@ def build_model(num_classes_with_background: int) -> torch.nn.Module:
     from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
     from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 
-    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1)
+    if pretrained:
+        model = maskrcnn_resnet50_fpn_v2(
+            weights=MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1,
+            box_score_thresh=SCORING_CONF_THRESHOLD,
+            box_detections_per_img=SCORING_MAX_DETS,
+        )
+    else:
+        model = maskrcnn_resnet50_fpn_v2(
+            weights=None,
+            weights_backbone=None,
+            box_score_thresh=SCORING_CONF_THRESHOLD,
+            box_detections_per_img=SCORING_MAX_DETS,
+        )
 
     in_features_box = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features_box, num_classes_with_background)
@@ -323,15 +342,17 @@ def train_one_epoch(
     return total_loss / max(n_batches, 1)
 
 
-@torch.no_grad()
 def run_predictions(
     model: torch.nn.Module,
     dataset: CarDDSegmentationDataset,
     device: torch.device,
-    score_threshold: float = 0.05,
+    score_threshold: float = SCORING_CONF_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Run the model over every image in `dataset` (eval mode, no augmentation)
-    and return COCO-format detections plus a file_name -> dataset image_id map."""
+    and return COCO-format detections plus a file_name -> dataset image_id map.
+
+    Runs under `torch.inference_mode()` and keeps at most `SCORING_MAX_DETS`
+    detections per image, by score."""
     model.eval()
     detections: list[dict[str, Any]] = []
     file_name_to_local_id: dict[str, int] = {}
@@ -340,15 +361,16 @@ def run_predictions(
         image_tensor, target = dataset[idx]
         file_name_to_local_id[target["file_name"]] = idx
 
-        output = model([image_tensor.to(device)])[0]
-        boxes = output["boxes"].cpu().numpy()
-        scores = output["scores"].cpu().numpy()
-        labels = output["labels"].cpu().numpy()
-        masks = output["masks"].cpu().numpy()  # [N, 1, H, W] soft masks
+        with torch.inference_mode():
+            output = model([image_tensor.to(device)])[0]
+            boxes = output["boxes"].cpu().numpy()
+            scores = output["scores"].cpu().numpy()
+            labels = output["labels"].cpu().numpy()
+            masks = output["masks"].cpu().numpy()  # [N, 1, H, W] soft masks
 
-        for box, score, label, mask in zip(boxes, scores, labels, masks, strict=True):
-            if score < score_threshold:
-                continue
+        keep = [i for i in np.argsort(-scores, kind="stable") if scores[i] >= score_threshold]
+        for i in keep[:SCORING_MAX_DETS]:
+            box, score, label, mask = boxes[i], scores[i], labels[i], masks[i]
             binary_mask = (mask[0] > 0.5).astype(np.uint8)
             rle = mask_to_rle(binary_mask)
             x0, y0, x1, y1 = box

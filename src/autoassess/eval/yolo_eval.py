@@ -18,6 +18,7 @@ import torch
 
 from autoassess.eval.coco_eval import build_coco_ground_truth, run_coco_eval
 from autoassess.eval.metrics import measure_inference_latency
+from autoassess.eval.scoring import OPERATING_CONF, SCORING_CONF_THRESHOLD, SCORING_MAX_DETS
 
 
 def resolve_dataset_yaml_for_ultralytics(dataset_config_path: Path) -> str:
@@ -93,23 +94,32 @@ def peak_vram_mb_for_yolo(device_arg: str) -> float | None:
     return torch.cuda.max_memory_allocated(device) / 1e6
 
 
-def run_yolo_coco_eval(
+def collect_yolo_detections(
     eval_model: Any,  # noqa: ANN401 — ultralytics.YOLO has no exported public type
     images_dir: Path,
-    labels_dir: Path,
-    class_names: list[str],
-) -> dict[str, Any]:
-    """Run inference over every image in `images_dir` and score the
-    predictions against COCO ground truth reconstructed from the converted
-    YOLO-seg labels, using the same pycocotools pipeline as Mask R-CNN's
-    trainer so every model in this project is scored identically.
+    coco_gt_dict: dict[str, Any],
+    imgsz: int = 640,
+) -> list[dict[str, Any]]:
+    """Run `eval_model` over every image in `coco_gt_dict` and return
+    COCO-format detections.
+
+    Inference uses the scoring settings (`SCORING_CONF_THRESHOLD`,
+    `SCORING_MAX_DETS`) so the full PR curve reaches pycocotools, and the
+    same `imgsz` as latency measurement.
     """
-    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names)
+    from pycocotools import mask as mask_utils
+
     file_name_to_id = {img["file_name"]: img["id"] for img in coco_gt_dict["images"]}
 
     detections: list[dict[str, Any]] = []
     for file_name, image_id in file_name_to_id.items():
-        results = eval_model.predict(str(images_dir / file_name), verbose=False)
+        results = eval_model.predict(
+            str(images_dir / file_name),
+            conf=SCORING_CONF_THRESHOLD,
+            max_det=SCORING_MAX_DETS,
+            imgsz=imgsz,
+            verbose=False,
+        )
         if not results:
             # Ultralytics returns an empty list rather than raising when the image
             # itself fails to decode (truncated/corrupt JPEG) — treat as zero
@@ -125,8 +135,6 @@ def run_yolo_coco_eval(
             if poly_xy.shape[0] < 3:
                 continue
             rle = polygon_xy_to_rle(poly_xy, width, height)
-            from pycocotools import mask as mask_utils
-
             bbox = mask_utils.toBbox(rle).tolist()
             detections.append({
                 "image_id": image_id,
@@ -135,7 +143,26 @@ def run_yolo_coco_eval(
                 "bbox": bbox,
                 "score": float(conf),
             })
+    return detections
 
+
+def run_yolo_coco_eval(
+    eval_model: Any,  # noqa: ANN401 — ultralytics.YOLO has no exported public type
+    images_dir: Path,
+    labels_dir: Path,
+    class_names: list[str],
+    imgsz: int = 640,
+) -> dict[str, Any]:
+    """Run inference over every image in `images_dir` and score the
+    predictions against COCO ground truth reconstructed from the converted
+    YOLO-seg labels, using the same pycocotools pipeline as Mask R-CNN's
+    trainer so every model in this project is scored identically.
+
+    Predictions are made at the scoring threshold (see
+    `autoassess.eval.scoring`), not Ultralytics' default conf=0.25.
+    """
+    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names)
+    detections = collect_yolo_detections(eval_model, images_dir, coco_gt_dict, imgsz)
     return run_coco_eval(coco_gt_dict, detections, class_names)
 
 
@@ -156,6 +183,8 @@ def measure_yolo_latency(
     )[:n_images]
 
     def _predict(image_path: Path) -> None:
-        eval_model.predict(str(image_path), imgsz=imgsz, verbose=False)
+        # Latency is measured at the deployment operating point (conf=0.25),
+        # not the near-zero scoring threshold, which would inflate NMS cost.
+        eval_model.predict(str(image_path), imgsz=imgsz, conf=OPERATING_CONF, verbose=False)
 
     return measure_inference_latency(_predict, image_paths)
