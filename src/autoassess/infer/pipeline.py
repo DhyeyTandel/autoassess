@@ -6,7 +6,7 @@ Chains the whole system into one call per image:
           -> per-instance severity grade -> triage decision
 
 The first four stages are exactly `autoassess.infer.associate` (damage
-model + parts model, IoU-matched, graded per instance — see that module's
+model + parts model, coverage-matched, graded per instance — see that module's
 docstring for the matching rule and the severity heuristic's circularity
 caveat, which applies here unchanged). This module adds the last stage:
 turning the per-instance severity grades into a single triage decision for
@@ -63,6 +63,7 @@ from PIL import Image
 
 from autoassess.eval.coco_eval import load_class_names
 from autoassess.infer.associate import (
+    DEFAULT_COVERAGE_THRESHOLD,
     MaskInstance,
     associate_damage_to_parts,
     build_association_records,
@@ -133,8 +134,8 @@ def run_pipeline_with_masks(
     severity_config_path: Path,
     triage_config_path: Path,
     damage_conf: float = 0.15,
-    parts_conf: float = 0.25,
-    iou_threshold: float = 0.10,
+    parts_conf: float = 0.15,
+    coverage_threshold: float = DEFAULT_COVERAGE_THRESHOLD,
     device: str = "cpu",
     secondary_damage_weights: Path | None = None,
     secondary_damage_dataset_config: Path | None = None,
@@ -187,7 +188,7 @@ def run_pipeline_with_masks(
     with Image.open(source) as im:
         width, height = im.size
 
-    associations = associate_damage_to_parts(damage_instances, part_instances, iou_threshold)
+    associations = associate_damage_to_parts(damage_instances, part_instances, coverage_threshold)
     records = build_association_records(
         damage_instances, associations, width, height, severity_config
     )
@@ -234,8 +235,9 @@ def parse_args() -> argparse.Namespace:
                         "same file as --severity-config).")
     p.add_argument("--source", type=Path, required=True)
     p.add_argument("--damage-conf", type=float, default=0.15)
-    p.add_argument("--parts-conf", type=float, default=0.25)
-    p.add_argument("--iou-threshold", type=float, default=0.10)
+    p.add_argument("--parts-conf", type=float, default=0.15)
+    p.add_argument("--coverage-threshold", type=float, default=DEFAULT_COVERAGE_THRESHOLD,
+                   help="Minimum fraction of a damage mask inside a part for assignment.")
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--secondary-damage-weights", type=Path, default=None,
                    help="Optional second damage model checkpoint (e.g. VehiDE); its "
@@ -263,7 +265,7 @@ def main() -> None:
         triage_config_path=args.triage_config,
         damage_conf=args.damage_conf,
         parts_conf=args.parts_conf,
-        iou_threshold=args.iou_threshold,
+        coverage_threshold=args.coverage_threshold,
         device=args.device,
         secondary_damage_weights=args.secondary_damage_weights,
         secondary_damage_dataset_config=args.secondary_damage_dataset_config,
