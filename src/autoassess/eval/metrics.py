@@ -89,6 +89,8 @@ def count_params(model: torch.nn.Module) -> dict[str, int]:
 
 def reset_peak_vram(device: torch.device) -> None:
     if device.type == "cuda":
+        # reset_peak_memory_stats doesn't lazy-init CUDA; without init it raises.
+        torch.cuda.init()  # type: ignore[no-untyped-call]
         torch.cuda.reset_peak_memory_stats(device)
 
 

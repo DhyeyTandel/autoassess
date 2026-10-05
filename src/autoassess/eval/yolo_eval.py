@@ -77,6 +77,8 @@ def resolve_processed_dir(dataset_config_path: Path) -> Path:
 
 def reset_peak_vram_for_yolo(device_arg: str) -> None:
     if device_arg not in ("cpu", "mps") and not device_arg.startswith("mps"):
+        # reset_peak_memory_stats doesn't lazy-init CUDA; without init it raises.
+        torch.cuda.init()  # type: ignore[no-untyped-call]
         torch.cuda.reset_peak_memory_stats(int(device_arg) if device_arg.isdigit() else device_arg)
 
 

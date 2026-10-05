@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 import pytest
+import torch
 from pycocotools.cocoeval import COCOeval
 
 from autoassess.eval import coco_eval
@@ -16,7 +17,9 @@ from autoassess.eval.metrics import (
     mask_iou_per_gt,
     mask_iou_true_positives,
     operating_point_metrics,
+    reset_peak_vram,
 )
+from autoassess.eval.yolo_eval import reset_peak_vram_for_yolo
 
 from .conftest import SyntheticCase, make_coco, make_dt
 
@@ -174,3 +177,30 @@ def test_run_coco_eval_end_to_end(synthetic_case: SyntheticCase) -> None:
     assert "mask_iou_mean" not in out
     assert 0.0 <= out["mask_iou_true_positives"] <= 1.0
     assert "precision" not in out["mask"]["per_class"]["dent"]
+
+
+@pytest.fixture
+def cuda_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+    monkeypatch.setattr(torch.cuda, "init", lambda: calls.append("init"))
+    monkeypatch.setattr(
+        torch.cuda, "reset_peak_memory_stats", lambda device=None: calls.append("reset")
+    )
+    return calls
+
+
+def test_reset_peak_vram_inits_cuda_before_reset(cuda_calls: list[str]) -> None:
+    reset_peak_vram(torch.device("cuda:0"))
+    assert cuda_calls == ["init", "reset"]
+
+
+def test_reset_peak_vram_for_yolo_inits_cuda_before_reset(cuda_calls: list[str]) -> None:
+    reset_peak_vram_for_yolo("0")
+    assert cuda_calls == ["init", "reset"]
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_reset_peak_vram_noop_on_non_cuda(cuda_calls: list[str], device: str) -> None:
+    reset_peak_vram(torch.device(device))
+    reset_peak_vram_for_yolo(device)
+    assert cuda_calls == []
