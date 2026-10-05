@@ -8,6 +8,7 @@
 - Test images hashed: 374
 - Unreadable files excluded: 0
 - Test images with a train neighbour at distance <= 6: 0 (0.0%)
+- Flagged test image list: [cardd_flagged_test.txt](split_audit/cardd_flagged_test.txt) (usable as `autoassess-eval --exclude-list`)
 
 Nearest-neighbour distance histogram (test images per bin):
 
@@ -65,6 +66,7 @@ Top 30 closest pairs:
 - Test images hashed: 276
 - Unreadable files excluded: 0
 - Test images with a train neighbour at distance <= 6: 12 (4.3%)
+- Flagged test image list: [carparts_flagged_test.txt](split_audit/carparts_flagged_test.txt) (usable as `autoassess-eval --exclude-list`)
 
 Nearest-neighbour distance histogram (test images per bin):
 
@@ -122,6 +124,7 @@ Top 30 closest pairs:
 - Test images hashed: 1741
 - Unreadable files excluded: 14
 - Test images with a train neighbour at distance <= 6: 45 (2.6%)
+- Flagged test image list: [vehide_flagged_test.txt](split_audit/vehide_flagged_test.txt) (usable as `autoassess-eval --exclude-list`)
 
 Nearest-neighbour distance histogram (test images per bin):
 
