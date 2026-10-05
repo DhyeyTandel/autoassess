@@ -24,17 +24,16 @@ from pathlib import Path
 from typing import Any
 
 import gradio as gr
-import numpy as np
 import pillow_heif
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from autoassess.infer.associate import MaskInstance
 from autoassess.infer.pipeline import (
     AUTO_APPROVE,
     HUMAN_REVIEW,
     TOTAL_LOSS_REVIEW,
     run_pipeline_with_masks,
 )
+from autoassess.infer.visualize import SEVERITY_COLORS, draw_overlay
 
 pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.heif uploads
 
@@ -64,11 +63,6 @@ SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")
 UPLOAD_TMP_PATH = Path("/tmp/autoassess_upload.jpg")
 
-# Severity/triage palette is semantic (maps to real risk), kept separate from
-# the UI's accent color. RGB tuples feed PIL overlay drawing; hex feeds CSS.
-SEVERITY_COLORS = {"minor": (240, 200, 50), "moderate": (240, 140, 30), "severe": (220, 50, 50)}
-PART_COLOR = (60, 140, 230)
-
 TRIAGE_META = {
     AUTO_APPROVE: {"label": "Auto-approve", "hex": "#2f9e58", "glyph": "check"},
     HUMAN_REVIEW: {"label": "Flag for human review", "hex": "#c8871a", "glyph": "flag"},
@@ -91,42 +85,6 @@ def _icon(glyph: str) -> str:
         f'<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">'
         f"{_GLYPH_PATHS[glyph]}</svg>"
     )
-
-
-def _decode_mask(inst: MaskInstance) -> np.ndarray:
-    from pycocotools import mask as mask_utils
-
-    return mask_utils.decode(inst.mask_rle).astype(bool)  # type: ignore[no-any-return]
-
-
-def draw_overlay(
-    image: Image.Image,
-    damage_instances: list[MaskInstance],
-    part_instances: list[MaskInstance],
-    severities: list[str],
-    parts_assigned: list[str],
-) -> Image.Image:
-    """Fill part masks (light blue) and damage masks (colored by severity)
-    into one RGBA layer, then draw a labeled outline per damage instance,
-    and composite the layer onto the image once at the end."""
-    fill = np.zeros((*image.size[::-1], 4), dtype=np.uint8)
-    for part in part_instances:
-        fill[_decode_mask(part)] = (*PART_COLOR, 60)
-    for damage, severity in zip(damage_instances, severities, strict=True):
-        color = SEVERITY_COLORS.get(severity, (150, 150, 150))
-        fill[_decode_mask(damage)] = (*color, 110)
-
-    overlay = Image.fromarray(fill, "RGBA")
-    draw = ImageDraw.Draw(overlay)
-    triples = zip(damage_instances, severities, parts_assigned, strict=True)
-    for damage, severity, part_name in triples:
-        color = SEVERITY_COLORS.get(severity, (150, 150, 150))
-        x0, y0, x1, y1 = damage.bbox
-        draw.rectangle([x0, y0, x1, y1], outline=(*color, 255), width=2)
-        label = f"{damage.class_name} ({severity}) @ {part_name}"
-        draw.text((x0 + 2, max(y0 - 14, 0)), label, fill=(*color, 255))
-
-    return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
 
 def render_triage_card(triage: dict[str, Any]) -> str:
