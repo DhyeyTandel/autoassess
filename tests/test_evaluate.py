@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 
 from autoassess.eval import evaluate
-from autoassess.eval.evaluate import detect_model_type, run_evaluation
+from autoassess.eval.evaluate import detect_model_type, load_exclude_list, run_evaluation
 from autoassess.eval.scoring import OPERATING_CONF, SCORING_CONF_THRESHOLD
 
 CLASS_NAMES = ["dent", "scratch"]
@@ -384,3 +384,93 @@ def test_label_overrides(
     )
     assert data["model_type"] == "yolov8-seg-parts"
     assert data["model"] == "b.pt"
+
+
+def test_load_exclude_list_ignores_comments_and_blanks(tmp_path: Path) -> None:
+    f = tmp_path / "ex.txt"
+    f.write_text("# header\n\ntest0.jpg\n  test1.jpg  \n# trailing\n\n")
+    assert load_exclude_list(f) == frozenset({"test0.jpg", "test1.jpg"})
+
+
+def _exclude_file(tmp_path: Path, *names: str) -> Path:
+    f = tmp_path / "exclude.txt"
+    f.write_text("# flagged\n" + "\n".join(names) + "\n")
+    return f
+
+
+def test_exclude_list_skips_image_and_records_block(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeYolo()
+    _patch_yolo(monkeypatch, fake)
+    ex = _exclude_file(tmp_path, "test0.jpg")
+
+    path = _run(tmp_path, dataset, exclude_list=ex)
+
+    assert path == tmp_path / "out" / "exp1_eval_test_excl" / "metrics.json"
+    data = json.loads(path.read_text())
+    assert data["eval_split"] == "test"
+    assert data["exclusion"] == {"list": str(ex), "n_excluded": 1, "n_listed": 1}
+    sources = [Path(s).name for s, _ in fake.calls]
+    assert sources
+    assert "test0.jpg" not in sources
+    assert "test1.jpg" in sources
+
+
+def test_no_exclude_list_means_null_exclusion(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo())
+    data = json.loads(_run(tmp_path, dataset).read_text())
+    assert data["exclusion"] is None
+
+
+def test_exclude_list_unknown_names_warn(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo())
+    ex = _exclude_file(tmp_path, "test0.jpg", "ghost1.jpg", "ghost2.jpg")
+    with caplog.at_level("WARNING"):  # configure_logging=False keeps caplog's root handler
+        path = _run(tmp_path, dataset, exclude_list=ex, configure_logging=False)
+    assert "ghost1.jpg" in caplog.text and "ghost2.jpg" in caplog.text
+    data = json.loads(path.read_text())
+    assert data["exclusion"]["n_listed"] == 3
+    assert data["exclusion"]["n_excluded"] == 1
+
+
+def test_exclude_list_all_unknown_raises(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeYolo()
+    _patch_yolo(monkeypatch, fake)
+    ex = _exclude_file(tmp_path, "nope.jpg")
+    with pytest.raises(ValueError, match="none of the"):
+        _run(tmp_path, dataset, exclude_list=ex)
+    assert fake.calls == []
+
+
+def test_exclude_output_dir_override_wins(
+    tmp_path: Path, dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_yolo(monkeypatch, _FakeYolo())
+    ex = _exclude_file(tmp_path, "test0.jpg")
+    out = tmp_path / "custom_out"
+    path = _run(tmp_path, dataset, exclude_list=ex, output_dir=out)
+    assert path.parent == out
+
+
+def test_maskrcnn_dataset_exclude_filters(dataset: Path, tmp_path: Path) -> None:
+    from autoassess.train.train_maskrcnn import CarDDSegmentationDataset
+
+    root = tmp_path / "processed"
+    full = CarDDSegmentationDataset(
+        root / "images" / "test", root / "labels" / "test", imgsz=32, augment=False
+    )
+    ds = CarDDSegmentationDataset(
+        root / "images" / "test", root / "labels" / "test", imgsz=32, augment=False,
+        exclude=frozenset({"test0.jpg"}),
+    )
+    assert len(full) == 2
+    assert len(ds) == 1
+    assert [p.stem for p in ds.label_files] == ["test1"]

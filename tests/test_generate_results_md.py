@@ -160,3 +160,55 @@ def test_vehide_description_does_not_claim_a_split() -> None:
     desc = _load_script().KNOWN_RUNS["vehide_seg_v1"][1]
     assert "Trained to epoch 48/50" in desc
     assert "val split" not in desc
+
+
+def _excl_metrics(case: SyntheticCase) -> dict:  # type: ignore[type-arg]
+    m = make_v2(case, "yolov8_seg_v1")
+    m["metrics"]["mask_map50_95"] = 0.1234
+    m["metrics"]["mask_map50"] = 0.5678
+    m["exclusion"] = {"list": "x.txt", "n_excluded": 12, "n_listed": 12}
+    return m
+
+
+def test_excluded_rows_rendered_when_both_files_exist(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+    write_metrics_json(runs / "yolov8_seg_v1_eval_test_excl", _excl_metrics(synthetic_case))
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    sec = _section(md, "Damage detection — YOLOv8-seg")
+    assert "| Mask mAP@0.5:0.95 (test, near-duplicates excluded, n=12 removed) | 0.1234 |" in sec
+    assert "| Mask mAP@0.5 (test, near-duplicates excluded, n=12 removed) | 0.5678 |" in sec
+    assert "| Macro F1 @ 0.25 (mask, excluded) |" in sec
+    assert "_Source (excluded): `runs/yolov8_seg_v1_eval_test_excl/metrics.json`_" in sec
+    assert "## Other runs found" not in md
+
+
+def test_excluded_rows_omitted_without_excl_file(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    assert "near-duplicates excluded" not in md
+    assert "Source (excluded)" not in md
+
+
+def test_excl_dirs_not_listed_as_other_runs(
+    synthetic_case: SyntheticCase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    write_metrics_json(runs / "yolov8_seg_v1", make_v2(synthetic_case, "yolov8_seg_v1"))
+    write_metrics_json(runs / "orphan_eval_test_excl", _excl_metrics(synthetic_case))
+    write_metrics_json(runs / "other_run", make_v2(synthetic_case, "other_run"))
+
+    md = _generate(tmp_path, runs, monkeypatch)
+
+    tail = md[md.index("## Other runs found"):]
+    assert "`other_run`" in tail
+    assert "orphan_eval_test_excl" not in tail

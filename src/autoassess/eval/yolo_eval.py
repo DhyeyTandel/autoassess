@@ -159,8 +159,9 @@ def run_yolo_coco_eval(
     class_names: list[str],
     imgsz: int = 640,
     device: str | None = None,
+    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Run inference over every image in `images_dir` and score the
+    """Run inference over every image in `images_dir` (minus `exclude`) and score the
     predictions against COCO ground truth reconstructed from the converted
     YOLO-seg labels, using the same pycocotools pipeline as Mask R-CNN's
     trainer so every model in this project is scored identically.
@@ -168,7 +169,7 @@ def run_yolo_coco_eval(
     Predictions are made at the scoring threshold (see
     `autoassess.eval.scoring`), not Ultralytics' default conf=0.25.
     """
-    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names)
+    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names, exclude)
     detections = collect_yolo_detections(eval_model, images_dir, coco_gt_dict, imgsz, device)
     return run_coco_eval(coco_gt_dict, detections, class_names)
 
@@ -188,9 +189,10 @@ def measure_yolo_latency(
     imgsz: int,
     n_images: int = 30,
     device: str | None = None,
+    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, float]:
     image_paths = sorted(
-        [*images_dir.glob("*.jpg"), *images_dir.glob("*.png")]
+        p for p in [*images_dir.glob("*.jpg"), *images_dir.glob("*.png")] if p.name not in exclude
     )[:n_images]
 
     def _predict(image_path: Path) -> None:

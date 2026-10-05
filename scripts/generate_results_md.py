@@ -33,6 +33,7 @@ from autoassess.eval.compare import (  # noqa: E402
     is_legacy,
     per_class_table,
 )
+from autoassess.eval.scoring import OPERATING_CONF  # noqa: E402
 from autoassess.utils.logging import get_logger  # noqa: E402
 
 log = get_logger(__name__)
@@ -77,6 +78,7 @@ def parse_args() -> argparse.Namespace:
 
 
 EVAL_TEST_SUFFIX = "_eval_test"
+EVAL_TEST_EXCL_SUFFIX = "_eval_test_excl"
 
 
 def load_all_metrics(runs_dir: Path) -> dict[str, dict[str, Any]]:
@@ -121,6 +123,39 @@ def resolve_run_metrics(
     return m, f"{runs_dir.name}/{run_name}/metrics.json"
 
 
+def load_excluded_metrics(
+    runs_dir: Path, run_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(metrics, source)`` for ``runs/<name>_eval_test_excl/metrics.json``
+    (schema v2 only), else ``(None, None)``."""
+    path = runs_dir / f"{run_name}{EVAL_TEST_EXCL_SUFFIX}" / "metrics.json"
+    if not path.is_file():
+        return None, None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        log.warning("Could not read %s; ignoring it.", path)
+        return None, None
+    if is_legacy(data):
+        log.warning("%s is not schema v2; ignoring it.", path)
+        return None, None
+    return data, f"{runs_dir.name}/{path.parent.name}/metrics.json"
+
+
+def excluded_rows(m_excl: dict[str, Any]) -> list[tuple[str, str]]:
+    """Headline rows for the near-duplicate-excluded test score."""
+    n = (m_excl.get("exclusion") or {}).get("n_excluded")
+    tag = f"test, near-duplicates excluded, n={n} removed"
+    mt = m_excl["metrics"]
+    f1 = m_excl["metrics"].get("operating_point", {}).get("mask", {}).get("f1")
+    return [
+        (f"Mask mAP@0.5:0.95 ({tag})", fmt(mt["mask_map50_95"])),
+        (f"Mask mAP@0.5 ({tag})", fmt(mt["mask_map50"])),
+        (f"Macro F1 @ {OPERATING_CONF} (mask, excluded)", fmt(f1)),
+    ]
+
+
 def fmt(value: Any, digits: int = 4) -> str:  # noqa: ANN401 — value may be float, int, str, bool, None
     if value is None:
         return "n/a"
@@ -137,6 +172,8 @@ def render_detection_section(
     desc: str,
     m: dict[str, Any] | None,
     source: str | None = None,
+    m_excl: dict[str, Any] | None = None,
+    source_excl: str | None = None,
 ) -> str:
     lines = [f"## {title}", "", desc, ""]
     if m is None:
@@ -146,11 +183,18 @@ def render_detection_section(
 
     if source:
         lines += [f"_Source: `{source}`_", ""]
+        if m_excl is not None and source_excl:
+            lines += [f"_Source (excluded): `{source_excl}`_", ""]
     lines += [
         "| Metric | Value |",
         "|---|---|",
         f"| Model | {m.get('model', 'n/a')} |",
         *[f"| {label} | {value} |" for label, value in headline_rows(m)],
+        *(
+            [f"| {label} | {value} |" for label, value in excluded_rows(m_excl)]
+            if m_excl is not None
+            else []
+        ),
         f"| Inference latency (ms/image, mean) | {fmt(m['inference']['latency_ms_mean'], 1)} |",
         f"| Inference latency (ms/image, p95) | {fmt(m['inference']['latency_ms_p95'], 1)} |",
         f"| Parameters (total) | {m['model_info']['params_total']:,} |",
@@ -326,7 +370,12 @@ def main() -> None:
         if run_name == "severity_v1":
             continue
         m, source = resolve_run_metrics(args.runs_dir, run_name, all_metrics)
-        sections.append(render_detection_section(run_name, title, desc, m, source))
+        m_excl, source_excl = (
+            load_excluded_metrics(args.runs_dir, run_name) if m is not None else (None, None)
+        )
+        sections.append(
+            render_detection_section(run_name, title, desc, m, source, m_excl, source_excl)
+        )
 
     sections.append(render_severity_section(all_metrics.get("severity_v1"), args.figures_dir))
     sections.append(render_failure_analysis_section(args.figures_dir))

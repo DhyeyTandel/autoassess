@@ -3,6 +3,7 @@
 Scores any trained checkpoint (Ultralytics YOLO-seg or torchvision Mask R-CNN)
 on one split of a processed dataset with the same pipeline the trainers use,
 and writes a schema-v2 ``metrics.json`` to ``<output_root>/<name>_eval_<split>/``
+(``..._eval_<split>_excl/`` when ``--exclude-list`` is given)
 (or to ``output_dir/metrics.json`` when the trainers call it, see ``run_evaluation``).
 Training-time fields are carried over read-only from ``<weights run dir>/metrics.json``
 (or the ``training_info`` argument); peak VRAM is measured over inference only.
@@ -164,6 +165,19 @@ def _check_split(images_dir: Path, labels_dir: Path) -> None:
         raise FileNotFoundError(f"Label directory for split does not exist: {labels_dir}")
 
 
+def load_exclude_list(path: Path) -> frozenset[str]:
+    """Read image basenames (one per line) to leave out of scoring.
+
+    ``#`` comment lines and blank lines are ignored; surrounding whitespace is stripped.
+    """
+    names = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            names.add(line)
+    return frozenset(names)
+
+
 def run_evaluation(
     weights: Path,
     model_type: str,
@@ -180,6 +194,7 @@ def run_evaluation(
     configure_logging: bool = True,
     model_type_label: str | None = None,
     model_id: str | None = None,
+    exclude_list: Path | None = None,
 ) -> Path:
     """Evaluate ``weights`` on ``split`` and write metrics.json; return its path.
 
@@ -196,12 +211,21 @@ def run_evaluation(
     for YOLO, the model recorded in the checkpoint's train_args else the weights
     file name; for Mask R-CNN the architecture id). ``configure_logging=False``
     skips ``setup_run_logging`` so a caller that already set up its own log file keeps it.
+
+    ``exclude_list`` (see ``load_exclude_list``) removes the listed images from
+    scoring and latency measurement. Output then defaults to
+    ``<output_root>/<run_name>_eval_<split>_excl`` and metrics.json gets an
+    ``exclusion`` block; ``eval_split`` stays the plain split name. Names not in
+    the split are warned about; if none exist a ValueError is raised.
     """
     if model_type not in ("yolo", "maskrcnn"):
         raise ValueError(f"model_type must be 'yolo' or 'maskrcnn', got {model_type!r}")
 
     name = run_name or _default_run_name(weights)
-    run_dir = output_dir if output_dir is not None else output_root / f"{name}_eval_{split}"
+    suffix = "_excl" if exclude_list is not None else ""
+    run_dir = (
+        output_dir if output_dir is not None else output_root / f"{name}_eval_{split}{suffix}"
+    )
     if configure_logging:
         setup_run_logging(run_dir)
     seed_everything(seed)
@@ -211,7 +235,30 @@ def run_evaluation(
     images_dir = processed_dir / "images" / split
     labels_dir = processed_dir / "labels" / split
     _check_split(images_dir, labels_dir)
-    n_images = len(list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.png")))
+    split_names = {p.name for p in [*images_dir.glob("*.jpg"), *images_dir.glob("*.png")]}
+
+    exclude: frozenset[str] = frozenset()
+    exclusion: dict[str, Any] | None = None
+    if exclude_list is not None:
+        listed = load_exclude_list(exclude_list)
+        unknown = sorted(listed - split_names)
+        if listed and len(unknown) == len(listed):
+            raise ValueError(
+                f"none of the {len(listed)} names in {exclude_list} exist in "
+                f"{images_dir}; is the exclude list for a different dataset?"
+            )
+        if unknown:
+            log.warning(
+                "%d of %d names in %s are not in the %s split (first 5: %s)",
+                len(unknown), len(listed), exclude_list, split, ", ".join(unknown[:5]),
+            )
+        exclude = listed
+        exclusion = {
+            "list": str(exclude_list),
+            "n_excluded": len(listed) - len(unknown),
+            "n_listed": len(listed),
+        }
+    n_images = len(split_names - exclude)
 
     torch_device = _resolve_device(device)
     log.info(
@@ -233,10 +280,12 @@ def run_evaluation(
 
         reset_peak_vram(torch_device)
         eval_result = run_yolo_coco_eval(
-            eval_model, images_dir, labels_dir, class_names, imgsz=imgsz, device=device
+            eval_model, images_dir, labels_dir, class_names, imgsz=imgsz, device=device,
+            exclude=exclude,
         )
         latency = measure_yolo_latency(
-            eval_model, images_dir, imgsz, n_images=latency_images, device=device
+            eval_model, images_dir, imgsz, n_images=latency_images, device=device,
+            exclude=exclude,
         )
         model_type_field = YOLO_MODEL_TYPE
     else:
@@ -244,7 +293,9 @@ def run_evaluation(
 
         default_model_id = MASKRCNN_MODEL_ID
         module = _load_maskrcnn(weights, len(class_names), torch_device)
-        dataset = CarDDSegmentationDataset(images_dir, labels_dir, imgsz=imgsz, augment=False)
+        dataset = CarDDSegmentationDataset(
+            images_dir, labels_dir, imgsz=imgsz, augment=False, exclude=exclude
+        )
 
         reset_peak_vram(torch_device)
         eval_result = evaluate_split(module, dataset, torch_device, class_names)
@@ -293,6 +344,7 @@ def run_evaluation(
         inference=latency,
         model_info=model_info,
     )
+    payload["exclusion"] = exclusion
     metrics_path = write_metrics_json(run_dir, payload)
 
     m = payload["metrics"]
@@ -336,6 +388,11 @@ def parse_args() -> argparse.Namespace:
                    help="Override the label written to metrics.json as model_type.")
     p.add_argument("--model-id", type=str, default=None,
                    help="Override the label written to metrics.json as model.")
+    p.add_argument("--exclude-list", type=Path, default=None,
+                   help="Text file of image basenames (one per line, '#' comments and blank "
+                        "lines ignored) to leave out of scoring, e.g. the flagged_test list "
+                        "from scripts/split_audit.py. Output goes to "
+                        "<output_root>/<name>_eval_<split>_excl/.")
     return p.parse_args()
 
 
@@ -359,6 +416,7 @@ def main() -> None:
         seed=seed,
         model_type_label=args.model_type_label,
         model_id=args.model_id,
+        exclude_list=args.exclude_list,
     )
 
 

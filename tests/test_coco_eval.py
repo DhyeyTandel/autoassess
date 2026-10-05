@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
 from autoassess.eval import coco_eval
 from autoassess.eval.scoring import OPERATING_CONF
@@ -79,3 +82,22 @@ def test_empty_detections_same_shape_fn_is_gt_count(synthetic_case: SyntheticCas
     assert out["operating_point"]["conf"] == OPERATING_CONF
     assert out["mask_iou_true_positives"] == 0.0
     assert out["mask_iou_per_gt"] == 0.0
+
+
+def test_build_coco_ground_truth_exclude(tmp_path: Path) -> None:
+    images = tmp_path / "images"
+    labels = tmp_path / "labels"
+    images.mkdir()
+    labels.mkdir()
+    for stem in ("a", "b"):
+        Image.fromarray(np.zeros((40, 40, 3), dtype=np.uint8)).save(images / f"{stem}.jpg")
+        (labels / f"{stem}.txt").write_text("0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
+    names = ["dent"]
+
+    full = coco_eval.build_coco_ground_truth(images, labels, names)
+    gt = coco_eval.build_coco_ground_truth(images, labels, names, exclude=frozenset({"a.jpg"}))
+
+    assert len(full["images"]) == 2 and len(full["annotations"]) == 2
+    assert [i["file_name"] for i in gt["images"]] == ["b.jpg"]
+    assert len(gt["annotations"]) == 1
+    assert gt["annotations"][0]["image_id"] == gt["images"][0]["id"]

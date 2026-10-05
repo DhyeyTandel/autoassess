@@ -111,11 +111,16 @@ class CarDDSegmentationDataset(Dataset):  # type: ignore[type-arg]
         augment: bool,
         augment_p: float = DEFAULT_AUGMENT_P,
         perspective_scale: float = DEFAULT_PERSPECTIVE_SCALE,
+        exclude: frozenset[str] = frozenset(),
     ) -> None:
         self.images_dir = images_dir
         self.labels_dir = labels_dir
         self.imgsz = imgsz
-        self.label_files = sorted(labels_dir.glob("*.txt"))
+        self.label_files = sorted(
+            p
+            for p in labels_dir.glob("*.txt")
+            if not any(p.stem + ext in exclude for ext in (".jpg", ".jpeg", ".png"))
+        )
         self.augment = augment
         self.transform = (
             build_full_augmentation_pipeline(augment_p, perspective_scale) if augment else None

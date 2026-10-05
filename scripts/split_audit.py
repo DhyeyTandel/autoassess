@@ -16,6 +16,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import sys
 from dataclasses import dataclass
@@ -66,6 +67,7 @@ class AuditResult:
     unreadable: list[str]  # files that failed to hash, relative to the processed dir
     histogram: list[int]  # nearest-neighbour distance counts, index 0..64
     pairs: list[Pair]  # top_k closest, sorted by (distance, test name, train name)
+    flagged_test: list[str]  # sorted basenames of every test image at distance <= threshold
 
 
 def phash(image_path: Path, hash_size: int = 8, highfreq_factor: int = 4) -> int:
@@ -162,6 +164,7 @@ def audit_split(processed_dir: Path, threshold: int = 6, top_k: int = 30) -> Aud
         unreadable=bad_test + bad_train,
         histogram=histogram,
         pairs=pairs,
+        flagged_test=sorted(test_paths[i].name for i in np.flatnonzero(nn_dist <= threshold)),
     )
 
 
@@ -195,7 +198,37 @@ def write_figures(name: str, result: AuditResult, reports_dir: Path) -> list[Pat
     return paths
 
 
-def _section(name: str, result: AuditResult, figures: list[Path], reports_dir: Path) -> str:
+def flagged_list_path(name: str, reports_dir: Path) -> Path:
+    """Where the flagged-test-image list for dataset ``name`` is written."""
+    return reports_dir / "split_audit" / f"{name}_flagged_test.txt"
+
+
+def write_flagged_list(name: str, result: AuditResult, config: Path, reports_dir: Path) -> Path:
+    """Write ``<reports-dir>/split_audit/<name>_flagged_test.txt``.
+
+    ``#`` header lines, then one test image basename per line (sorted). Written
+    even when nothing is flagged (header only); usable as ``--exclude-list``.
+    """
+    out = flagged_list_path(name, reports_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    header = [
+        f"# dataset: {name}",
+        f"# threshold: phash Hamming distance <= {result.threshold}",
+        f"# date: {datetime.date.today().isoformat()}",
+        f"# source config: {config}",
+        f"# flagged test images: {len(result.flagged_test)}",
+    ]
+    out.write_text("\n".join([*header, *result.flagged_test]) + "\n", encoding="utf-8")
+    return out
+
+
+def _section(
+    name: str,
+    result: AuditResult,
+    figures: list[Path],
+    reports_dir: Path,
+    flagged_file: Path | None = None,
+) -> str:
     lines = [
         f"## {name}",
         "",
@@ -207,6 +240,15 @@ def _section(name: str, result: AuditResult, figures: list[Path], reports_dir: P
         f"- Unreadable files excluded: {len(result.unreadable)}",
         f"- Test images with a train neighbour at distance <= {result.threshold}: "
         f"{result.n_flagged} ({result.pct_flagged:.1f}%)",
+        *(
+            [
+                f"- Flagged test image list: "
+                f"[{flagged_file.name}]({flagged_file.relative_to(reports_dir).as_posix()}) "
+                "(usable as `autoassess-eval --exclude-list`)"
+            ]
+            if flagged_file is not None
+            else []
+        ),
         "",
         "Nearest-neighbour distance histogram (test images per bin):",
         "",
@@ -286,7 +328,8 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("skipping %s: %s", name, exc)
             continue
         figures = write_figures(name, result, reports_dir)
-        sections.append(_section(name, result, figures, reports_dir))
+        flagged_file = write_flagged_list(name, result, cfg, reports_dir)
+        sections.append(_section(name, result, figures, reports_dir, flagged_file))
 
     reports_dir.mkdir(parents=True, exist_ok=True)
     out_md = reports_dir / "split_audit.md"

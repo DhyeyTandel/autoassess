@@ -146,3 +146,52 @@ def test_audit_split_reports_truncated_jpeg_as_unreadable(sa: ModuleType, tmp_pa
     assert sum(res.histogram) == 3
     assert all(p.test.name != "te_broken.jpg" for p in res.pairs)
     assert all(p.train.name != "tr_broken.jpg" for p in res.pairs)
+
+
+def _fake_cfg(tmp_path: Path, proc: Path) -> Path:
+    cfg_dir = tmp_path / "configs"
+    cfg_dir.mkdir(exist_ok=True)
+    cfg = cfg_dir / "fake.yaml"
+    cfg.write_text(f"path: {proc}\ntrain: images/train\ntest: images/test\nnames:\n  0: x\n")
+    return cfg
+
+
+def test_main_writes_flagged_test_list(
+    sa: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc = _fake_processed(tmp_path / "data" / "processed" / "fake")
+    cfg = _fake_cfg(tmp_path, proc)
+    monkeypatch.chdir(tmp_path)
+    reports = tmp_path / "out" / "reports"
+
+    assert sa.main(["--dataset-config", str(cfg), "--reports-dir", str(reports),
+                    "--top-k", "1"]) == 0
+
+    flagged = reports / "split_audit" / "fake_flagged_test.txt"
+    lines = flagged.read_text().splitlines()
+    header = [ln for ln in lines if ln.startswith("#")]
+    names = [ln for ln in lines if ln and not ln.startswith("#")]
+    assert lines[: len(header)] == header  # header lines come first
+    assert any("fake" in ln for ln in header)
+    assert any("threshold" in ln and "6" in ln for ln in header)
+    assert any("date" in ln.lower() for ln in header)
+    assert any(str(cfg) in ln for ln in header)
+    assert names == ["te_dup.jpg"]
+    assert "fake_flagged_test.txt" in (reports / "split_audit.md").read_text()
+
+
+def test_main_writes_header_only_flag_file_when_nothing_flagged(
+    sa: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proc = _fake_processed(tmp_path / "data" / "processed" / "fake")
+    (proc / "images" / "test" / "te_dup.jpg").unlink()
+    cfg = _fake_cfg(tmp_path, proc)
+    monkeypatch.chdir(tmp_path)
+    reports = tmp_path / "out" / "reports"
+
+    assert sa.main(["--dataset-config", str(cfg), "--reports-dir", str(reports),
+                    "--top-k", "1"]) == 0
+
+    lines = (reports / "split_audit" / "fake_flagged_test.txt").read_text().splitlines()
+    assert lines
+    assert all(ln.startswith("#") for ln in lines)

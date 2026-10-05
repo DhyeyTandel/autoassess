@@ -46,12 +46,19 @@ def _polygon_to_rle(
 
 
 def build_coco_ground_truth(
-    images_dir: Path, labels_dir: Path, class_names: list[str]
+    images_dir: Path,
+    labels_dir: Path,
+    class_names: list[str],
+    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Reconstruct a COCO-format ground-truth dict from a converted YOLO-seg
     split. Category ids are 1-indexed (COCO convention), in the same order
     as `class_names` (already validated against the source COCO categories
     by `autoassess.data.convert`, so this ordering is authoritative).
+
+    Images whose file name (e.g. ``0001.jpg``) is in ``exclude`` are skipped
+    along with their annotations; every consumer iterates this dict's images,
+    so they are skipped downstream too.
     """
     categories = [
         {"id": i + 1, "name": name, "supercategory": "damage"}
@@ -66,7 +73,7 @@ def build_coco_ground_truth(
     for image_id, label_path in enumerate(label_files, start=1):
         stem = label_path.stem
         image_path = _find_image(images_dir, stem)
-        if image_path is None:
+        if image_path is None or image_path.name in exclude:
             continue
         with Image.open(image_path) as img:
             width, height = img.size
