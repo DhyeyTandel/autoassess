@@ -135,7 +135,7 @@ def run_coco_eval(
     """
     from pycocotools.coco import COCO
 
-    from autoassess.eval.metrics import coco_eval_summary, mask_iou_mean
+    from autoassess.eval.metrics import coco_eval_summary, mask_iou_true_positives
 
     coco_gt = COCO()
     coco_gt.dataset = coco_gt_dict
@@ -153,6 +153,6 @@ def run_coco_eval(
 
     box_result = coco_eval_summary(coco_gt, coco_dt, "bbox", class_ids, class_names)
     mask_result = coco_eval_summary(coco_gt, coco_dt, "segm", class_ids, class_names)
-    iou_mean = mask_iou_mean(coco_gt, coco_dt)
+    iou_mean = mask_iou_true_positives(coco_gt, coco_dt)
 
     return {"box": box_result, "mask": mask_result, "mask_iou_mean": iou_mean}
