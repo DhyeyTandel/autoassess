@@ -37,6 +37,18 @@ Usage
         --parts-weights  runs/parts_seg_v1/weights/best.pt \\
         --source image.jpg \\
         --out    reports/pipeline/image.json
+
+Optional second damage model (e.g. VehiDE, for torn / missing_part /
+punctured), merged into the primary one before association — see
+`autoassess.infer.merge` for the rule:
+
+    autoassess-pipeline ... \\
+        --secondary-damage-weights runs/vehide_seg_v1/weights/best.pt \\
+        --secondary-damage-dataset-config configs/vehide.yaml \\
+        --merge-config configs/severity.yaml
+
+Each instance record carries `source_model`, the run directory name of the
+weights that produced it.
 """
 
 from __future__ import annotations
@@ -56,6 +68,7 @@ from autoassess.infer.associate import (
     build_association_records,
     run_yolo_seg_inference,
 )
+from autoassess.infer.merge import MergeConfig, merge_damage_instances
 from autoassess.models.severity import SeverityConfig
 from autoassess.utils.logging import get_logger
 
@@ -123,18 +136,52 @@ def run_pipeline_with_masks(
     parts_conf: float = 0.25,
     iou_threshold: float = 0.10,
     device: str = "cpu",
+    secondary_damage_weights: Path | None = None,
+    secondary_damage_dataset_config: Path | None = None,
+    secondary_damage_conf: float = 0.15,
+    merge_config_path: Path | None = None,
 ) -> tuple[dict[str, Any], list[MaskInstance], list[MaskInstance]]:
     """Run the full image -> triage-decision pipeline. Returns the
     JSON-safe result dict plus the raw damage/part `MaskInstance` lists
     (RLE masks + boxes) for callers that need to draw them, e.g. `app.py`.
     `run_pipeline` below is the JSON-only convenience wrapper the CLI uses.
+
+    If `secondary_damage_weights` is given, `secondary_damage_dataset_config`
+    and `merge_config_path` are required (ValueError otherwise); the second
+    model's detections are merged into the first (see `autoassess.infer.merge`)
+    before association, and `damage_class_names` is extended with the merged
+    secondary classes.
     """
+    if secondary_damage_weights is not None and (
+        secondary_damage_dataset_config is None or merge_config_path is None
+    ):
+        raise ValueError(
+            "secondary_damage_weights requires secondary_damage_dataset_config "
+            "and merge_config_path"
+        )
     damage_class_names = load_class_names(damage_dataset_config)
     part_class_names = load_class_names(parts_dataset_config)
     severity_config = SeverityConfig.load(severity_config_path)
     triage_config = TriageConfig.load(triage_config_path)
 
     damage_instances = run_yolo_seg_inference(damage_weights, source, damage_conf, device)
+    primary_name = damage_weights.parent.parent.name
+    sources = [primary_name] * len(damage_instances)
+    if secondary_damage_weights is not None:
+        assert secondary_damage_dataset_config is not None and merge_config_path is not None
+        merge_config = MergeConfig.load(merge_config_path)
+        secondary_instances = run_yolo_seg_inference(
+            secondary_damage_weights, source, secondary_damage_conf, device
+        )
+        damage_instances, tags = merge_damage_instances(
+            damage_instances, secondary_instances,
+            merge_config.secondary_classes, merge_config.suppress_iou,
+        )
+        secondary_name = secondary_damage_weights.parent.parent.name
+        sources = [primary_name if t == "primary" else secondary_name for t in tags]
+        for name in load_class_names(secondary_damage_dataset_config):
+            if name in merge_config.secondary_classes and name not in damage_class_names:
+                damage_class_names.append(name)
     part_instances = run_yolo_seg_inference(parts_weights, source, parts_conf, device)
 
     with Image.open(source) as im:
@@ -144,6 +191,9 @@ def run_pipeline_with_masks(
     records = build_association_records(
         damage_instances, associations, width, height, severity_config
     )
+    # build_association_records emits one record per association, in input order.
+    for record, source_model in zip(records, sources, strict=True):
+        record["source_model"] = source_model
     triage = triage_decision(records, triage_config)
 
     log.info(
@@ -187,6 +237,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--parts-conf", type=float, default=0.25)
     p.add_argument("--iou-threshold", type=float, default=0.10)
     p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--secondary-damage-weights", type=Path, default=None,
+                   help="Optional second damage model checkpoint (e.g. VehiDE); its "
+                        "configured classes are merged into the primary detections.")
+    p.add_argument("--secondary-damage-dataset-config", type=Path,
+                   default=Path("configs/vehide.yaml"),
+                   help="Dataset YAML for the secondary model's class names.")
+    p.add_argument("--secondary-damage-conf", type=float, default=0.15,
+                   help="Confidence threshold for the secondary model.")
+    p.add_argument("--merge-config", type=Path, default=Path("configs/severity.yaml"),
+                   help="Config containing the merge: section.")
     p.add_argument("--out", type=Path, default=None)
     return p.parse_args()
 
@@ -205,6 +265,10 @@ def main() -> None:
         parts_conf=args.parts_conf,
         iou_threshold=args.iou_threshold,
         device=args.device,
+        secondary_damage_weights=args.secondary_damage_weights,
+        secondary_damage_dataset_config=args.secondary_damage_dataset_config,
+        secondary_damage_conf=args.secondary_damage_conf,
+        merge_config_path=args.merge_config,
     )
 
     output_json = json.dumps(result, indent=2)
