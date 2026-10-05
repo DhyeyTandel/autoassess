@@ -1,0 +1,17 @@
+# dataset: carparts
+# threshold: phash Hamming distance <= 6
+# date: 2026-10-05
+# source config: configs/carparts.yaml
+# flagged test images: 12
+car4_jpg.rf.8978131a7b03be689c244641e42e1307.jpg
+te95_jpg.rf.90e0581218f8ab3c48a779dd976bdd62.jpg
+train102_jpg.rf.35a1739cad86d20f2c125194253f60bd.jpg
+train109_jpg.rf.08dba575830134e01840fcf86651a0f1.jpg
+train188_jpg.rf.649354ed3bc34d0deda30305fe95b153.jpg
+train266_jpg.rf.075be2ee75dd2a38767eb96d12b2dc3d.jpg
+train326_jpg.rf.e0b1e35f9ca4c2f27b1824cca83c540b.jpg
+train33_jpg.rf.443a660fd96c1a39bd67dc0d95abc529.jpg
+train352_jpg.rf.d427037b79fa65d940f6a659674b702c.jpg
+train35_jpg.rf.5dcc32ab156353262ee723907e74f6b3.jpg
+train385_jpg.rf.829acf83603d294e6ab4d16d7d58ef46.jpg
+train56_jpg.rf.ce7baacc457a3783f8e12885d783e654.jpg

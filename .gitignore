@@ -75,3 +75,8 @@ Desktop.ini
 
 # --- Downloaded reference archives ---
 *.zip
+
+# --- Credentials (never commit these) ---
+kaggle.json
+KAGGLE_JSON.json
+*.kaggle.json

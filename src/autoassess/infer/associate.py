@@ -2,13 +2,32 @@
 
 Runs the CarDD damage model (`train_yolo.py`) and the parts model
 (`train_parts.py`) over the same image, then assigns each damage instance to
-whichever part instance it overlaps most (by pixel mask IoU) — "which panel
-is this damage on." Instances with no part overlapping above
-`--iou-threshold` fall back to `"unassigned"` rather than being forced onto
-the nearest-but-still-wrong panel: a low-confidence or genuinely
-out-of-frame damage detection (e.g. damage on a wheel or mirror, panels the
-parts model was never trained to segment — see `configs/carparts.yaml`
-"Known gap") should say so rather than silently mislabel.
+the part it is most covered by — "which panel is this damage on."
+
+Matching rule: coverage = area(damage ∩ part) / area(damage). Each damage
+instance goes to the part with the highest coverage, provided it is at least
+`--coverage-threshold` (default 0.5). Ties go to the higher part confidence,
+then to input order. Otherwise the instance falls back to `"unassigned"`
+rather than being forced onto the nearest-but-still-wrong panel.
+
+Why coverage and not mask IoU: IoU penalises a small damage mask on a large
+panel even when the damage sits entirely inside it. A dent fully inside a
+door has IoU = dent_area / door_area, so a 2k px dent on an 80k px door gets
+IoU 0.025 and was left unassigned under the old 0.10 IoU threshold.
+
+Measured on the first 150 CarDD test images (431 damage instances), share
+assigned to a part:
+    14.4%  IoU >= 0.10,      parts conf 0.25  (old rule)
+    19.5%  coverage >= 0.5,  parts conf 0.25
+    25.8%  coverage >= 0.5,  parts conf 0.15  (current defaults)
+On the parts test split, lowering the parts cutoff from 0.25 to 0.15 costs a
+little precision (box P 0.873 -> 0.841) and gains a little recall
+(R 0.967 -> 0.971).
+
+Known gap: the remaining unassigned damage is mostly on panels the 6-class
+parts model does not have (fender, quarter panel, grille) — see
+`configs/carparts.yaml` "Known gap". Those should read "unassigned" rather
+than be mislabelled.
 
 Output is a structured JSON list, one entry per damage instance:
 
@@ -21,7 +40,8 @@ Output is a structured JSON list, one entry per damage instance:
                                    # its circularity caveat)
         "mask_area_px": float,
         "confidence": float,      # damage model's own detection confidence
-        "part_iou": float | null  # IoU with the assigned part, null if unassigned
+        "part_coverage": float | null  # fraction of the damage mask inside the
+                                       # assigned part, null if unassigned
     }
 
 Usage
@@ -47,7 +67,7 @@ from autoassess.utils.logging import get_logger
 
 log = get_logger(__name__)
 
-DEFAULT_IOU_THRESHOLD = 0.10
+DEFAULT_COVERAGE_THRESHOLD = 0.5
 UNASSIGNED = "unassigned"
 
 
@@ -56,7 +76,7 @@ class MaskInstance:
     """One segmented instance, framework-agnostic — a damage detection or a
     part detection. `mask_rle` is a COCO RLE dict (pycocotools format),
     kept as RLE rather than a dense array since that's what pycocotools'
-    IoU routine consumes directly and it's far cheaper to carry around."""
+    mask routines consume directly and it's far cheaper to carry around."""
 
     class_name: str
     mask_rle: dict[str, Any]
@@ -67,7 +87,7 @@ class MaskInstance:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Associate damage instances with vehicle parts by mask IoU."
+        description="Associate damage instances with vehicle parts by mask coverage."
     )
     p.add_argument("--damage-weights", type=Path, required=True,
                    help="Path to a trained CarDD damage model checkpoint (.pt).")
@@ -83,12 +103,12 @@ def parse_args() -> argparse.Namespace:
                    help="Path to a single input image.")
     p.add_argument("--damage-conf", type=float, default=0.15,
                    help="Confidence threshold for the damage model (default: 0.15).")
-    p.add_argument("--parts-conf", type=float, default=0.25,
-                   help="Confidence threshold for the parts model (default: 0.25).")
-    p.add_argument("--iou-threshold", type=float, default=DEFAULT_IOU_THRESHOLD,
-                   help="Minimum mask IoU for a damage instance to be assigned to a part "
-                        f"rather than falling back to \"{UNASSIGNED}\" (default: "
-                        f"{DEFAULT_IOU_THRESHOLD}).")
+    p.add_argument("--parts-conf", type=float, default=0.15,
+                   help="Confidence threshold for the parts model (default: 0.15).")
+    p.add_argument("--coverage-threshold", type=float, default=DEFAULT_COVERAGE_THRESHOLD,
+                   help="Minimum coverage (damage area inside the part / damage area) for a "
+                        f"damage instance to be assigned to a part rather than falling back "
+                        f"to \"{UNASSIGNED}\" (default: {DEFAULT_COVERAGE_THRESHOLD}).")
     p.add_argument("--device", type=str, default="cpu",
                    help="Inference device (default: cpu).")
     p.add_argument("--out", type=Path, default=None,
@@ -136,22 +156,29 @@ def run_yolo_seg_inference(
     return instances
 
 
-def mask_iou(a: dict[str, Any], b: dict[str, Any]) -> float:
+def mask_coverage(damage_rle: dict[str, Any], part_rle: dict[str, Any]) -> float:
+    """Fraction of the damage mask lying inside the part mask:
+    area(damage ∩ part) / area(damage). 0.0 when the damage area is 0."""
     from pycocotools import mask as mask_utils
 
-    iou_matrix = mask_utils.iou([a], [b], [0])
-    return float(iou_matrix[0, 0])
+    damage_area = float(mask_utils.area(damage_rle))
+    if damage_area <= 0.0:
+        return 0.0
+    inter = mask_utils.merge([damage_rle, part_rle], intersect=True)
+    return float(mask_utils.area(inter)) / damage_area
 
 
 def associate_damage_to_parts(
     damage_instances: list[MaskInstance],
     part_instances: list[MaskInstance],
-    iou_threshold: float,
+    coverage_threshold: float,
 ) -> list[tuple[MaskInstance, MaskInstance | None, float]]:
-    """For each damage instance, find the part instance with maximum mask
-    IoU. Returns (damage, best_part_or_None, best_iou) triples — best_part
-    is None (and best_iou is 0.0) when either there are no part instances at
-    all, or the best IoU found is below `iou_threshold`.
+    """For each damage instance, find the part instance with the highest
+    coverage (see `mask_coverage`). Ties go to the higher part confidence,
+    then to input order. Returns (damage, best_part_or_None, coverage)
+    triples — best_part is None (and coverage is 0.0) when there are no
+    part instances, or the best coverage is below `coverage_threshold`
+    (or zero).
 
     This is independent per damage instance (not a one-to-one assignment
     problem) — multiple damage instances legitimately map to the same part
@@ -161,17 +188,23 @@ def associate_damage_to_parts(
     results: list[tuple[MaskInstance, MaskInstance | None, float]] = []
     for damage in damage_instances:
         best_part: MaskInstance | None = None
-        best_iou = 0.0
+        best_cov = 0.0
         for part in part_instances:
-            iou = mask_iou(damage.mask_rle, part.mask_rle)
-            if iou > best_iou:
-                best_iou = iou
+            cov = mask_coverage(damage.mask_rle, part.mask_rle)
+            if cov <= 0.0:
+                continue
+            if (
+                best_part is None
+                or cov > best_cov
+                or (cov == best_cov and part.confidence > best_part.confidence)
+            ):
+                best_cov = cov
                 best_part = part
 
-        if best_part is None or best_iou < iou_threshold:
+        if best_part is None or best_cov < coverage_threshold:
             results.append((damage, None, 0.0))
         else:
-            results.append((damage, best_part, best_iou))
+            results.append((damage, best_part, best_cov))
     return results
 
 
@@ -187,7 +220,7 @@ def build_association_records(
     deliberate choice — a single instance's severity should not be inflated
     by unrelated damage elsewhere in the same photo)."""
     records = []
-    for damage, part, iou in associations:
+    for damage, part, coverage in associations:
         single_instance = [DamageInstance(
             class_name=damage.class_name, mask_area=damage.mask_area, bbox=damage.bbox
         )]
@@ -199,7 +232,7 @@ def build_association_records(
             "severity": grade["label"],
             "mask_area_px": damage.mask_area,
             "confidence": damage.confidence,
-            "part_iou": iou if part is not None else None,
+            "part_coverage": coverage if part is not None else None,
         })
     return records
 
@@ -222,7 +255,9 @@ def main() -> None:
     with Image.open(args.source) as im:
         width, height = im.size
 
-    associations = associate_damage_to_parts(damage_instances, part_instances, args.iou_threshold)
+    associations = associate_damage_to_parts(
+        damage_instances, part_instances, args.coverage_threshold
+    )
     records = build_association_records(
         damage_instances, associations, width, height, severity_config
     )
@@ -239,7 +274,7 @@ def main() -> None:
         "n_unassigned": n_unassigned,
         "damage_class_names": damage_class_names,
         "part_class_names": part_class_names,
-        "iou_threshold": args.iou_threshold,
+        "coverage_threshold": args.coverage_threshold,
         "instances": records,
     }
 

@@ -8,7 +8,26 @@ config-driven training script.
 
 Usage
 -----
+    python app.py                               # merged: CarDD + VehiDE (default)
+    DAMAGE_MODEL_SOURCE=cardd python app.py     # CarDD damage model only
+    DAMAGE_MODEL_SOURCE=vehide python app.py    # VehiDE damage model only
+
+    # Merged mode: CarDD is primary; VehiDE's extra classes (see the `merge:`
+    # section of configs/severity.yaml) are merged in. SECONDARY_DAMAGE_CONF
+    # (default 0.07) is the VehiDE confidence cutoff. 0.07 is an explicit
+    # high-recall demo setting: at 0.15 the demo misses a hanging/detached front
+    # bumper on CarDD test image 000042, which VehiDE detects as missing_part at
+    # 0.07. The cost is precision on VehiDE's test split (missing_part P 0.59 ->
+    # ~0.45, torn P 0.33 -> ~0.20); roughly half the extra VehiDE detections are
+    # false alarms. This favours not missing damage. `autoassess-pipeline` keeps
+    # its own 0.15 default; SECONDARY_DAMAGE_CONF=0.15 restores the
+    # precision-leaning setting here.
+    SECONDARY_DAMAGE_CONF=0.25 python app.py
+
+    # Or override weights/parts paths individually (DAMAGE_WEIGHTS overrides only
+    # the primary model, SECONDARY_DAMAGE_WEIGHTS only the secondary):
     DAMAGE_WEIGHTS=runs/yolov8_seg_v1/weights/best.pt \\
+    SECONDARY_DAMAGE_WEIGHTS=runs/vehide_seg_v1/weights/best.pt \\
     PARTS_WEIGHTS=runs/parts_seg_v1/weights/best.pt \\
     python app.py
 """
@@ -16,36 +35,97 @@ Usage
 from __future__ import annotations
 
 import os
+import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
-import numpy as np
 import pillow_heif
-from PIL import Image, ImageDraw
+from PIL import Image, ImageOps
 
-from autoassess.infer.associate import MaskInstance
 from autoassess.infer.pipeline import (
     AUTO_APPROVE,
     HUMAN_REVIEW,
     TOTAL_LOSS_REVIEW,
     run_pipeline_with_masks,
 )
+from autoassess.infer.visualize import SEVERITY_COLORS, draw_overlay
 
 pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.heif uploads
 
-DAMAGE_WEIGHTS = Path(os.environ.get("DAMAGE_WEIGHTS", "runs/yolov8_seg_v1/weights/best.pt"))
+# Two damage models exist — CarDD (6 classes, fully converged) and VehiDE (7
+# classes incl. torn/punctured/missing_part, which CarDD has no equivalent
+# for, but only trained to 48/50 epochs). Weights and dataset config must be
+# switched together — a weights/config mismatch would silently mislabel every
+# detection (wrong class count/names) rather than erroring, so each (weights,
+# config) pair is keyed off one env var instead of two independent ones. The
+# "merged" source runs CarDD as primary and VehiDE as secondary; each entry is
+# (primary_weights, primary_config, secondary_weights, secondary_config), with
+# the secondary pair None for single-model sources.
+_DAMAGE_MODEL_SOURCES: dict[str, tuple[str, str, str | None, str | None]] = {
+    "merged": (
+        "runs/yolov8_seg_v1/weights/best.pt",
+        "configs/cardd.yaml",
+        "runs/vehide_seg_v1/weights/best.pt",
+        "configs/vehide.yaml",
+    ),
+    "cardd": ("runs/yolov8_seg_v1/weights/best.pt", "configs/cardd.yaml", None, None),
+    "vehide": ("runs/vehide_seg_v1/weights/best.pt", "configs/vehide.yaml", None, None),
+}
+_DEFAULT_DAMAGE_SOURCE = "merged"
+_DEFAULT_SECONDARY_CONF = 0.07
+
+
+@dataclass(frozen=True)
+class DamageModelSettings:
+    """Resolved damage-model choice; secondary fields are None for single-model sources."""
+
+    source: str
+    primary_weights: Path
+    primary_config: Path
+    secondary_weights: Path | None
+    secondary_config: Path | None
+    secondary_conf: float
+
+
+def resolve_damage_models(env: Mapping[str, str]) -> DamageModelSettings:
+    """Resolve damage-model settings from env-style vars (pure; no I/O).
+
+    Raises ValueError for an unknown DAMAGE_MODEL_SOURCE.
+    """
+    source = env.get("DAMAGE_MODEL_SOURCE", _DEFAULT_DAMAGE_SOURCE)
+    if source not in _DAMAGE_MODEL_SOURCES:
+        raise ValueError(
+            f"DAMAGE_MODEL_SOURCE={source!r} is not one of {sorted(_DAMAGE_MODEL_SOURCES)}."
+        )
+    p_weights, p_config, s_weights, s_config = _DAMAGE_MODEL_SOURCES[source]
+    secondary_weights: Path | None = None
+    secondary_config: Path | None = None
+    if s_weights is not None and s_config is not None:
+        secondary_weights = Path(env.get("SECONDARY_DAMAGE_WEIGHTS", s_weights))
+        secondary_config = Path(s_config)
+    return DamageModelSettings(
+        source=source,
+        primary_weights=Path(env.get("DAMAGE_WEIGHTS", p_weights)),
+        primary_config=Path(p_config),
+        secondary_weights=secondary_weights,
+        secondary_config=secondary_config,
+        secondary_conf=float(env.get("SECONDARY_DAMAGE_CONF", _DEFAULT_SECONDARY_CONF)),
+    )
+
+
+_damage_models = resolve_damage_models(os.environ)
+DAMAGE_WEIGHTS = _damage_models.primary_weights
+DAMAGE_DATASET_CONFIG = _damage_models.primary_config
+SECONDARY_DAMAGE_WEIGHTS = _damage_models.secondary_weights
+SECONDARY_DAMAGE_DATASET_CONFIG = _damage_models.secondary_config
+SECONDARY_DAMAGE_CONF = _damage_models.secondary_conf
 PARTS_WEIGHTS = Path(os.environ.get("PARTS_WEIGHTS", "runs/parts_seg_v1/weights/best.pt"))
-DAMAGE_DATASET_CONFIG = Path("configs/cardd.yaml")
 PARTS_DATASET_CONFIG = Path("configs/carparts.yaml")
 SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")
-UPLOAD_TMP_PATH = Path("/tmp/autoassess_upload.jpg")
-
-# Severity/triage palette is semantic (maps to real risk), kept separate from
-# the UI's accent color. RGB tuples feed PIL overlay drawing; hex feeds CSS.
-SEVERITY_COLORS = {"minor": (240, 200, 50), "moderate": (240, 140, 30), "severe": (220, 50, 50)}
-PART_COLOR = (60, 140, 230)
 
 TRIAGE_META = {
     AUTO_APPROVE: {"label": "Auto-approve", "hex": "#2f9e58", "glyph": "check"},
@@ -69,42 +149,6 @@ def _icon(glyph: str) -> str:
         f'<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">'
         f"{_GLYPH_PATHS[glyph]}</svg>"
     )
-
-
-def _decode_mask(inst: MaskInstance) -> np.ndarray:
-    from pycocotools import mask as mask_utils
-
-    return mask_utils.decode(inst.mask_rle).astype(bool)  # type: ignore[no-any-return]
-
-
-def draw_overlay(
-    image: Image.Image,
-    damage_instances: list[MaskInstance],
-    part_instances: list[MaskInstance],
-    severities: list[str],
-    parts_assigned: list[str],
-) -> Image.Image:
-    """Fill part masks (light blue) and damage masks (colored by severity)
-    into one RGBA layer, then draw a labeled outline per damage instance,
-    and composite the layer onto the image once at the end."""
-    fill = np.zeros((*image.size[::-1], 4), dtype=np.uint8)
-    for part in part_instances:
-        fill[_decode_mask(part)] = (*PART_COLOR, 60)
-    for damage, severity in zip(damage_instances, severities, strict=True):
-        color = SEVERITY_COLORS.get(severity, (150, 150, 150))
-        fill[_decode_mask(damage)] = (*color, 110)
-
-    overlay = Image.fromarray(fill, "RGBA")
-    draw = ImageDraw.Draw(overlay)
-    triples = zip(damage_instances, severities, parts_assigned, strict=True)
-    for damage, severity, part_name in triples:
-        color = SEVERITY_COLORS.get(severity, (150, 150, 150))
-        x0, y0, x1, y1 = damage.bbox
-        draw.rectangle([x0, y0, x1, y1], outline=(*color, 255), width=2)
-        label = f"{damage.class_name} ({severity}) @ {part_name}"
-        draw.text((x0 + 2, max(y0 - 14, 0)), label, fill=(*color, 255))
-
-    return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
 
 def render_triage_card(triage: dict[str, Any]) -> str:
@@ -147,27 +191,71 @@ def _rgb_hex(rgb: tuple[int, int, int]) -> str:
     return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
+def save_upload_lossless(image: Image.Image, directory: Path | None = None) -> Path:
+    """Write `image` as RGB PNG to a unique temp file and return its path.
+
+    Lossless on purpose: a JPEG re-encode shifts low-confidence scores enough to
+    drop borderline detections. The caller owns (and must delete) the file.
+    """
+    fd, name = tempfile.mkstemp(suffix=".png", dir=directory)
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            image.convert("RGB").save(fh, format="PNG")
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def normalize_upload(image: Image.Image | None) -> Image.Image | None:
+    """Return a new RGB, EXIF-upright copy of `image` (None passes through).
+
+    Used on upload so the input preview shows a browser-renderable PNG instead
+    of the raw .heic gradio would otherwise serve back. Gradio's own
+    preprocess (image_utils.preprocess_image) already applies
+    ImageOps.exif_transpose when Orientation != 1 and the transposed image
+    carries no Orientation tag, so by the time a value reaches Python it is
+    upright; transposing again here is a no-op for those images and only
+    matters for callers passing an untransposed image.
+    """
+    if image is None:
+        return None
+    return ImageOps.exif_transpose(image).convert("RGB")
+
+
 def assess(image: Image.Image) -> tuple[Image.Image, dict[str, Any], str]:
     if image is None:
         raise gr.Error("Upload an image first.")
-    if not DAMAGE_WEIGHTS.exists() or not PARTS_WEIGHTS.exists():
+    required = [DAMAGE_WEIGHTS, PARTS_WEIGHTS]
+    if SECONDARY_DAMAGE_WEIGHTS is not None:
+        required.append(SECONDARY_DAMAGE_WEIGHTS)
+    missing = [p for p in required if not p.exists()]
+    if missing:
         raise gr.Error(
-            f"Model weights not found (looked for {DAMAGE_WEIGHTS} and {PARTS_WEIGHTS}). "
-            "Set DAMAGE_WEIGHTS / PARTS_WEIGHTS env vars, or train the models first."
+            f"Model weights not found: {', '.join(str(p) for p in missing)}. "
+            "Set DAMAGE_WEIGHTS / SECONDARY_DAMAGE_WEIGHTS / PARTS_WEIGHTS env vars, "
+            "or train the models first."
         )
 
-    image.convert("RGB").save(UPLOAD_TMP_PATH)
-
-    result, damage_instances, part_instances = run_pipeline_with_masks(
-        source=UPLOAD_TMP_PATH,
-        damage_weights=DAMAGE_WEIGHTS,
-        parts_weights=PARTS_WEIGHTS,
-        damage_dataset_config=DAMAGE_DATASET_CONFIG,
-        parts_dataset_config=PARTS_DATASET_CONFIG,
-        severity_config_path=SEVERITY_CONFIG,
-        triage_config_path=SEVERITY_CONFIG,
-        device=DEVICE,
-    )
+    upload_path = save_upload_lossless(image)
+    try:
+        result, damage_instances, part_instances = run_pipeline_with_masks(
+            source=upload_path,
+            damage_weights=DAMAGE_WEIGHTS,
+            parts_weights=PARTS_WEIGHTS,
+            damage_dataset_config=DAMAGE_DATASET_CONFIG,
+            parts_dataset_config=PARTS_DATASET_CONFIG,
+            severity_config_path=SEVERITY_CONFIG,
+            triage_config_path=SEVERITY_CONFIG,
+            device=DEVICE,
+            secondary_damage_weights=SECONDARY_DAMAGE_WEIGHTS,
+            secondary_damage_dataset_config=SECONDARY_DAMAGE_DATASET_CONFIG,
+            secondary_damage_conf=SECONDARY_DAMAGE_CONF,
+            merge_config_path=SEVERITY_CONFIG if SECONDARY_DAMAGE_WEIGHTS is not None else None,
+        )
+    finally:
+        upload_path.unlink(missing_ok=True)
 
     severities = [rec["severity"] for rec in result["instances"]]
     parts_assigned = [rec["part"] for rec in result["instances"]]
@@ -334,7 +422,9 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
     )
     with gr.Row(equal_height=False):
         with gr.Column(min_width=320):
-            image_input = gr.Image(type="pil", label="Vehicle photo")
+            # format="png": the default (webp) is lossy; the re-served preview should
+            # be lossless and browser-renderable (raw .heic is not).
+            image_input = gr.Image(type="pil", label="Vehicle photo", format="png")
             submit_btn = gr.Button("Assess damage", variant="primary")
         with gr.Column(min_width=320):
             overlay_output = gr.Image(type="pil", label="Detected damage + parts")
@@ -347,6 +437,8 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
         "through human review until independently confirmed.</div>"
     )
 
+    # .upload (not .change): the returned value does not re-fire .upload, so no loop.
+    image_input.upload(normalize_upload, inputs=image_input, outputs=image_input)
     submit_btn.click(
         fn=assess, inputs=[image_input], outputs=[overlay_output, json_output, triage_output]
     )

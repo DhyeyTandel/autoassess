@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "autoassess-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["AUTOASSESS_DEVICE=mps", "uv", "run", "python", "app.py"],
+      "port": 7860
+    }
+  ]
+}

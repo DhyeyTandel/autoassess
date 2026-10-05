@@ -1,0 +1,5 @@
+# dataset: cardd
+# threshold: phash Hamming distance <= 6
+# date: 2026-10-05
+# source config: configs/cardd.yaml
+# flagged test images: 0

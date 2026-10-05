@@ -82,13 +82,14 @@ select = ["E", "F", "W", "I", "UP", "ANN"]
 ignore = ["ANN101", "ANN102"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = ["slow: needs real weights or network"]
 
 [tool.coverage.run]
 source = ["src/autoassess"]

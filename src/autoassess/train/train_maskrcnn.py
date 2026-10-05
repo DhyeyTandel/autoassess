@@ -22,6 +22,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -41,14 +42,10 @@ from autoassess.eval.coco_eval import (
     mask_to_rle,
     run_coco_eval,
 )
-from autoassess.eval.metrics import (
-    build_metrics_json,
-    count_params,
-    measure_inference_latency,
-    peak_vram_mb,
-    reset_peak_vram,
-    write_metrics_json,
-)
+from autoassess.eval.evaluate import run_evaluation
+from autoassess.eval.metrics import peak_vram_mb, reset_peak_vram
+from autoassess.eval.scoring import SCORING_CONF_THRESHOLD, SCORING_MAX_DETS
+from autoassess.eval.yolo_eval import resolve_processed_dir
 from autoassess.utils.config import load_config, resolve_paths
 from autoassess.utils.logging import get_logger, setup_run_logging
 from autoassess.utils.seed import seed_everything
@@ -114,11 +111,16 @@ class CarDDSegmentationDataset(Dataset):  # type: ignore[type-arg]
         augment: bool,
         augment_p: float = DEFAULT_AUGMENT_P,
         perspective_scale: float = DEFAULT_PERSPECTIVE_SCALE,
+        exclude: frozenset[str] = frozenset(),
     ) -> None:
         self.images_dir = images_dir
         self.labels_dir = labels_dir
         self.imgsz = imgsz
-        self.label_files = sorted(labels_dir.glob("*.txt"))
+        self.label_files = sorted(
+            p
+            for p in labels_dir.glob("*.txt")
+            if not any(p.stem + ext in exclude for ext in (".jpg", ".jpeg", ".png"))
+        )
         self.augment = augment
         self.transform = (
             build_full_augmentation_pipeline(augment_p, perspective_scale) if augment else None
@@ -248,7 +250,13 @@ def collate_fn(
     return list(images), list(targets)
 
 
-def build_model(num_classes_with_background: int) -> torch.nn.Module:
+def build_model(num_classes_with_background: int, pretrained: bool = True) -> torch.nn.Module:
+    """Build Mask R-CNN with heads sized for `num_classes_with_background`.
+
+    The model's own box_score_thresh / box_detections_per_img are set to the
+    scoring values so torchvision's internal 0.05 filter does not truncate
+    the PR curve. `pretrained=False` skips weight downloads (offline tests).
+    """
     from torchvision.models.detection import (
         MaskRCNN_ResNet50_FPN_V2_Weights,
         maskrcnn_resnet50_fpn_v2,
@@ -256,7 +264,19 @@ def build_model(num_classes_with_background: int) -> torch.nn.Module:
     from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
     from torchvision.models.detection.mask_rcnn import MaskRCNNPredictor
 
-    model = maskrcnn_resnet50_fpn_v2(weights=MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1)
+    if pretrained:
+        model = maskrcnn_resnet50_fpn_v2(
+            weights=MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1,
+            box_score_thresh=SCORING_CONF_THRESHOLD,
+            box_detections_per_img=SCORING_MAX_DETS,
+        )
+    else:
+        model = maskrcnn_resnet50_fpn_v2(
+            weights=None,
+            weights_backbone=None,
+            box_score_thresh=SCORING_CONF_THRESHOLD,
+            box_detections_per_img=SCORING_MAX_DETS,
+        )
 
     in_features_box = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features_box, num_classes_with_background)
@@ -323,15 +343,17 @@ def train_one_epoch(
     return total_loss / max(n_batches, 1)
 
 
-@torch.no_grad()
 def run_predictions(
     model: torch.nn.Module,
     dataset: CarDDSegmentationDataset,
     device: torch.device,
-    score_threshold: float = 0.05,
+    score_threshold: float = SCORING_CONF_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Run the model over every image in `dataset` (eval mode, no augmentation)
-    and return COCO-format detections plus a file_name -> dataset image_id map."""
+    and return COCO-format detections plus a file_name -> dataset image_id map.
+
+    Runs under `torch.inference_mode()` and keeps at most `SCORING_MAX_DETS`
+    detections per image, by score."""
     model.eval()
     detections: list[dict[str, Any]] = []
     file_name_to_local_id: dict[str, int] = {}
@@ -340,15 +362,16 @@ def run_predictions(
         image_tensor, target = dataset[idx]
         file_name_to_local_id[target["file_name"]] = idx
 
-        output = model([image_tensor.to(device)])[0]
-        boxes = output["boxes"].cpu().numpy()
-        scores = output["scores"].cpu().numpy()
-        labels = output["labels"].cpu().numpy()
-        masks = output["masks"].cpu().numpy()  # [N, 1, H, W] soft masks
+        with torch.inference_mode():
+            output = model([image_tensor.to(device)])[0]
+            boxes = output["boxes"].cpu().numpy()
+            scores = output["scores"].cpu().numpy()
+            labels = output["labels"].cpu().numpy()
+            masks = output["masks"].cpu().numpy()  # [N, 1, H, W] soft masks
 
-        for box, score, label, mask in zip(boxes, scores, labels, masks, strict=True):
-            if score < score_threshold:
-                continue
+        keep = [i for i in np.argsort(-scores, kind="stable") if scores[i] >= score_threshold]
+        for i in keep[:SCORING_MAX_DETS]:
+            box, score, label, mask = boxes[i], scores[i], labels[i], masks[i]
             binary_mask = (mask[0] > 0.5).astype(np.uint8)
             rle = mask_to_rle(binary_mask)
             x0, y0, x1, y1 = box
@@ -409,6 +432,73 @@ def evaluate_split(
     return run_coco_eval(coco_gt_dict, detections, class_names)
 
 
+def report_on_test(
+    *,
+    model: torch.nn.Module,
+    run_dir: Path,
+    dataset_config: Path,
+    imgsz: int,
+    device: str,
+    epochs: int,
+    batch: int,
+    patience: int,
+    best_epoch: int,
+    early_stopped: bool,
+    wall_time_seconds_total: float,
+    epoch_wall_times_seconds: list[float],
+    vram_peak_mb_training: float | None,
+) -> Path:
+    """Score the selected checkpoint on the **test** split and write
+    ``run_dir/metrics.json`` (schema v2) through the standalone evaluator.
+
+    Val is used only for checkpoint selection / early stopping during training;
+    it never feeds the reported numbers. Evaluates ``weights/best.pt``. If no
+    epoch ever improved on ``-inf`` (e.g. zero epochs ran this invocation) there
+    is no best.pt, so the current in-memory ``model`` state is saved there first
+    so the evaluator has a checkpoint to load. ``params_total`` /
+    ``params_trainable`` come from the evaluator's freshly loaded model.
+    """
+    weights = run_dir / "weights" / "best.pt"
+    if not weights.exists():
+        log.warning("best.pt not found; saving the current in-memory model to %s.", weights)
+        weights.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"model_state_dict": model.state_dict()}, weights)
+
+    training_info: dict[str, Any] = {
+        "epochs_requested": epochs,
+        "epochs_run_this_invocation": len(epoch_wall_times_seconds),
+        "batch": batch,
+        "patience": patience,
+        "best_epoch": best_epoch,
+        "early_stopped": early_stopped,
+        "wall_time_seconds_total": wall_time_seconds_total,
+        "epoch_wall_times_seconds": epoch_wall_times_seconds,
+        "vram_peak_mb_training": vram_peak_mb_training,
+    }
+    metrics_path = run_evaluation(
+        weights=weights,
+        model_type="maskrcnn",
+        dataset_config=dataset_config,
+        split="test",
+        output_dir=run_dir,
+        device=device,
+        imgsz=imgsz,
+        training_info=training_info,
+        configure_logging=False,
+    )
+    try:
+        m = json.loads(metrics_path.read_text(encoding="utf-8"))["metrics"]
+    except (OSError, ValueError, KeyError):
+        log.warning("Could not read headline metrics back from %s", metrics_path)
+        return metrics_path
+    log.info(
+        "Test-split metrics written to %s | mask mAP50=%.4f mAP50-95=%.4f | "
+        "box mAP50=%.4f mAP50-95=%.4f",
+        metrics_path, m["mask_map50"], m["mask_map50_95"], m["box_map50"], m["box_map50_95"],
+    )
+    return metrics_path
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -426,7 +516,7 @@ def main() -> None:
     class_names = load_class_names(args.dataset_config)
     num_classes_with_background = len(class_names) + 1
 
-    processed_dir = Path(cfg.data.processed_dir) / "cardd"
+    processed_dir = resolve_processed_dir(args.dataset_config)
     workers = args.workers if args.workers is not None else int(cfg.data.get("num_workers", 4))
 
     train_dataset = CarDDSegmentationDataset(
@@ -470,6 +560,8 @@ def main() -> None:
     early_stopped = False
     epoch_times: list[float] = []
 
+    # Training-time VRAM: reset right before training, read right after it ends
+    # (before the test-split evaluation, which measures its own inference peak).
     reset_peak_vram(device)
     train_start = time.monotonic()
 
@@ -513,46 +605,24 @@ def main() -> None:
             break
 
     total_wall_time = time.monotonic() - train_start
+    vram_peak_mb_training = peak_vram_mb(device)
 
-    # final evaluation with the best checkpoint, mirroring YOLO's own final re-validation
-    best_ckpt = weights_dir / "best.pt"
-    if best_ckpt.exists():
-        best_state = torch.load(best_ckpt, map_location=device, weights_only=False)
-        model.load_state_dict(best_state["model_state_dict"])
-    final_eval = evaluate_split(model, val_dataset, device, class_names)
-
-    latency = measure_inference_latency(
-        lambda img: model([img.to(device)]),
-        [val_dataset[i][0] for i in range(min(len(val_dataset), 30))],
-    )
-    model_info = {
-        **count_params(model),
-        "vram_peak_mb": peak_vram_mb(device),
-    }
-
-    payload = build_metrics_json(
-        run_name=args.name,
-        model_type="maskrcnn",
-        model=args.model,
-        class_names=class_names,
-        epochs_requested=args.epochs,
-        epochs_run_this_invocation=len(epoch_times),
-        batch=args.batch,
+    metrics_path = report_on_test(
+        model=model,
+        run_dir=run_dir,
+        dataset_config=args.dataset_config,
         imgsz=args.imgsz,
         device=args.device,
+        epochs=args.epochs,
+        batch=args.batch,
         patience=args.patience,
         best_epoch=best_epoch,
         early_stopped=early_stopped,
         wall_time_seconds_total=total_wall_time,
         epoch_wall_times_seconds=epoch_times,
-        box_metrics=final_eval["box"],
-        mask_metrics=final_eval["mask"],
-        mask_iou=final_eval["mask_iou_mean"],
-        inference=latency,
-        model_info=model_info,
+        vram_peak_mb_training=vram_peak_mb_training,
     )
-    metrics_path = write_metrics_json(run_dir, payload)
-    log.info("Training complete. Metrics written to %s", metrics_path)
+    log.info("Training complete. Test-split metrics written to %s", metrics_path)
 
 
 if __name__ == "__main__":

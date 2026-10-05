@@ -10,7 +10,7 @@ AutoAssess is an automated vehicle damage localisation and severity grading syst
 ## Stack
 | Concern | Library |
 |---|---|
-| Language | Python 3.11 |
+| Language | Python 3.12 |
 | Deep Learning | PyTorch |
 | Detection / Segmentation | Ultralytics YOLOv8 (`yolov8n-seg`, `yolov8s-seg`) |
 | Instance Segmentation (alt) | torchvision Mask R-CNN |
@@ -121,3 +121,24 @@ autoassess/
 - Do not use `print()` for logging in src/ — use the `logging` module.
 - Do not commit large binary files (datasets, weights) — add to `.gitignore`.
 - Do not use notebooks for training or evaluation.
+
+---
+
+## Agent workflow
+Implementation work is split between an orchestrator and workers.
+
+- **Orchestrator** (main Claude Code session): plans, writes the dispatch
+  for each task, reviews every diff, reruns the quality gates itself, and
+  integrates. It does not write implementation code.
+- **Worker** (`.claude/agents/sonnet-worker.md`, runs on Sonnet): receives
+  exactly one scoped task per dispatch and edits only the files that task
+  names. Every behaviour change gets a test that fails before and passes
+  after, built on the synthetic COCO fixtures in `tests/conftest.py`. Reports
+  raw output of `pytest`, `ruff check`, and `mypy --strict`.
+- Workers never retrain models and never read-modify-write anything under
+  `runs/` or `data/`. Tests use `tmp_path`.
+- Tasks that touch disjoint files may run in parallel; anything sharing a
+  file runs in sequence.
+- GPU work (evaluating on the test split, training) runs on Colab through the
+  `colab-mcp` server and is driven by the orchestrator only, never by a
+  worker. Retraining needs explicit approval each time.

@@ -27,6 +27,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from autoassess.eval.compare import (  # noqa: E402
+    LEGACY_NOTICE,
+    headline_rows,
+    is_legacy,
+    per_class_table,
+)
+from autoassess.eval.scoring import OPERATING_CONF  # noqa: E402
 from autoassess.utils.logging import get_logger  # noqa: E402
 
 log = get_logger(__name__)
@@ -45,6 +52,14 @@ KNOWN_RUNS: dict[str, tuple[str, str]] = {
         "Part segmentation — YOLOv8-seg",
         "Trained on Carparts-Seg, remapped to 6 panel classes.",
     ),
+    "vehide_seg_v1": (
+        "Damage detection — YOLOv8-seg (VehiDE)",
+        "Trained on VehiDE (7 structural/cosmetic damage classes, incl. torn/"
+        "punctured/missing_part — types CarDD has no equivalent for). Trained "
+        "to epoch 48/50 — training crashed on Colab resuming "
+        "into epoch 49 after a runtime reset; see runs/vehide_seg_v1/results.csv "
+        "for the full 48-epoch training curve.",
+    ),
     "severity_v1": (
         "Severity classifier",
         "Two-branch ResNet-18, weak supervision from the heuristic grader.",
@@ -62,13 +77,83 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+EVAL_TEST_SUFFIX = "_eval_test"
+EVAL_TEST_EXCL_SUFFIX = "_eval_test_excl"
+
+
 def load_all_metrics(runs_dir: Path) -> dict[str, dict[str, Any]]:
+    """Load ``runs/<name>/metrics.json`` for every real run.
+
+    Directories named ``*_eval_<split>`` hold standalone ``autoassess-eval``
+    re-scores, not runs of their own, so they are skipped here (see
+    ``resolve_run_metrics`` for how a re-score replaces its run's metrics).
+    """
     found = {}
     for metrics_path in sorted(runs_dir.glob("*/metrics.json")):
         run_name = metrics_path.parent.name
+        if "_eval_" in run_name:
+            continue
         with metrics_path.open("r", encoding="utf-8") as f:
             found[run_name] = json.load(f)
     return found
+
+
+def resolve_run_metrics(
+    runs_dir: Path, run_name: str, all_metrics: dict[str, dict[str, Any]]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(metrics, source)`` for a run, preferring a schema-v2
+    ``runs/<name>_eval_test/metrics.json`` (a test-split re-score of an older
+    run) over ``runs/<name>/metrics.json``. ``source`` is the path used, relative
+    to the runs dir's name (e.g. ``runs/<name>/metrics.json``), or None if the
+    run has no metrics."""
+    rescored = runs_dir / f"{run_name}{EVAL_TEST_SUFFIX}" / "metrics.json"
+    if rescored.is_file():
+        try:
+            with rescored.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            log.warning("Could not read %s; ignoring it.", rescored)
+        else:
+            if not is_legacy(data):
+                return data, f"{runs_dir.name}/{rescored.parent.name}/metrics.json"
+            log.warning("%s is not schema v2; ignoring it.", rescored)
+    m = all_metrics.get(run_name)
+    if m is None:
+        return None, None
+    return m, f"{runs_dir.name}/{run_name}/metrics.json"
+
+
+def load_excluded_metrics(
+    runs_dir: Path, run_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(metrics, source)`` for ``runs/<name>_eval_test_excl/metrics.json``
+    (schema v2 only), else ``(None, None)``."""
+    path = runs_dir / f"{run_name}{EVAL_TEST_EXCL_SUFFIX}" / "metrics.json"
+    if not path.is_file():
+        return None, None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        log.warning("Could not read %s; ignoring it.", path)
+        return None, None
+    if is_legacy(data):
+        log.warning("%s is not schema v2; ignoring it.", path)
+        return None, None
+    return data, f"{runs_dir.name}/{path.parent.name}/metrics.json"
+
+
+def excluded_rows(m_excl: dict[str, Any]) -> list[tuple[str, str]]:
+    """Headline rows for the near-duplicate-excluded test score."""
+    n = (m_excl.get("exclusion") or {}).get("n_excluded")
+    tag = f"test, near-duplicates excluded, n={n} removed"
+    mt = m_excl["metrics"]
+    f1 = m_excl["metrics"].get("operating_point", {}).get("mask", {}).get("f1")
+    return [
+        (f"Mask mAP@0.5:0.95 ({tag})", fmt(mt["mask_map50_95"])),
+        (f"Mask mAP@0.5 ({tag})", fmt(mt["mask_map50"])),
+        (f"Macro F1 @ {OPERATING_CONF} (mask, excluded)", fmt(f1)),
+    ]
 
 
 def fmt(value: Any, digits: int = 4) -> str:  # noqa: ANN401 — value may be float, int, str, bool, None
@@ -81,22 +166,35 @@ def fmt(value: Any, digits: int = 4) -> str:  # noqa: ANN401 — value may be fl
     return str(value)
 
 
-def render_detection_section(run_name: str, title: str, desc: str, m: dict[str, Any] | None) -> str:
+def render_detection_section(
+    run_name: str,
+    title: str,
+    desc: str,
+    m: dict[str, Any] | None,
+    source: str | None = None,
+    m_excl: dict[str, Any] | None = None,
+    source_excl: str | None = None,
+) -> str:
     lines = [f"## {title}", "", desc, ""]
     if m is None:
         lines.append(f"_Pending — not yet trained (no `runs/{run_name}/metrics.json` found)._")
         lines.append("")
         return "\n".join(lines)
 
+    if source:
+        lines += [f"_Source: `{source}`_", ""]
+        if m_excl is not None and source_excl:
+            lines += [f"_Source (excluded): `{source_excl}`_", ""]
     lines += [
         "| Metric | Value |",
         "|---|---|",
         f"| Model | {m.get('model', 'n/a')} |",
-        f"| Box mAP@0.5 | {fmt(m['metrics']['box_map50'])} |",
-        f"| Box mAP@0.5:0.95 | {fmt(m['metrics']['box_map50_95'])} |",
-        f"| Mask mAP@0.5 | {fmt(m['metrics']['mask_map50'])} |",
-        f"| Mask mAP@0.5:0.95 | {fmt(m['metrics']['mask_map50_95'])} |",
-        f"| Mean mask IoU | {fmt(m['metrics']['mask_iou_mean'])} |",
+        *[f"| {label} | {value} |" for label, value in headline_rows(m)],
+        *(
+            [f"| {label} | {value} |" for label, value in excluded_rows(m_excl)]
+            if m_excl is not None
+            else []
+        ),
         f"| Inference latency (ms/image, mean) | {fmt(m['inference']['latency_ms_mean'], 1)} |",
         f"| Inference latency (ms/image, p95) | {fmt(m['inference']['latency_ms_p95'], 1)} |",
         f"| Parameters (total) | {m['model_info']['params_total']:,} |",
@@ -109,15 +207,11 @@ def render_detection_section(run_name: str, title: str, desc: str, m: dict[str, 
         "",
         "### Per-class",
         "",
-        "| Class | Precision | Recall | Box AP50 | Mask AP50 |",
-        "|---|---|---|---|---|",
+        *per_class_table(m),
+        "",
     ]
-    for name, pc in m["metrics"]["per_class"].items():
-        lines.append(
-            f"| {name} | {fmt(pc.get('precision'))} | {fmt(pc.get('recall'))} "
-            f"| {fmt(pc.get('box_ap50'))} | {fmt(pc.get('mask_ap50'))} |"
-        )
-    lines.append("")
+    if is_legacy(m):
+        lines += [LEGACY_NOTICE, ""]
     return "\n".join(lines)
 
 
@@ -275,7 +369,13 @@ def main() -> None:
     for run_name, (title, desc) in KNOWN_RUNS.items():
         if run_name == "severity_v1":
             continue
-        sections.append(render_detection_section(run_name, title, desc, all_metrics.get(run_name)))
+        m, source = resolve_run_metrics(args.runs_dir, run_name, all_metrics)
+        m_excl, source_excl = (
+            load_excluded_metrics(args.runs_dir, run_name) if m is not None else (None, None)
+        )
+        sections.append(
+            render_detection_section(run_name, title, desc, m, source, m_excl, source_excl)
+        )
 
     sections.append(render_severity_section(all_metrics.get("severity_v1"), args.figures_dir))
     sections.append(render_failure_analysis_section(args.figures_dir))
