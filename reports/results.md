@@ -11,18 +11,18 @@ _Source: `runs/yolov8_seg_v1_eval_test/metrics.json`_
 | Metric | Value |
 |---|---|
 | Model | yolov8n-seg.pt |
-| Box mAP@0.5 | 0.6415 |
-| Box mAP@0.5:0.95 | 0.4231 |
-| Mask mAP@0.5 | 0.6177 |
-| Mask mAP@0.5:0.95 | 0.4005 |
-| Mask IoU (true positives) | 0.7646 |
-| Mask IoU (per GT, misses = 0) | 0.4617 |
-| Macro P / R / F1 @ conf 0.25 (mask) | 0.5632 / 0.6477 / 0.5953 |
+| Box mAP@0.5 | 0.6407 |
+| Box mAP@0.5:0.95 | 0.4234 |
+| Mask mAP@0.5 | 0.6203 |
+| Mask mAP@0.5:0.95 | 0.4012 |
+| Mask IoU (true positives) | 0.7659 |
+| Mask IoU (per GT, misses = 0) | 0.4624 |
+| Macro P / R / F1 @ conf 0.25 (mask) | 0.5617 / 0.6475 / 0.5944 |
 | Evaluated on | test |
 | Inference latency (ms/image, mean) | 30.4 |
-| Inference latency (ms/image, p95) | 47.0 |
+| Inference latency (ms/image, p95) | 36.0 |
 | Parameters (total) | 3,259,234 |
-| Peak VRAM (MB) | n/a |
+| Peak VRAM (MB) | 309.8 |
 | Epochs (requested / this run) | 100 / 100 |
 | Best epoch | 86 |
 | Early stopped | False |
@@ -32,12 +32,12 @@ _Source: `runs/yolov8_seg_v1_eval_test/metrics.json`_
 
 | Class | Precision@0.25 | Recall@0.25 | F1@0.25 | Best-F1 conf | Box AP50 | Mask AP50 | Max recall |
 |---|---|---|---|---|---|---|---|
-| dent | 0.5071 | 0.6059 | 0.5521 | 0.357 | 0.5537 | 0.5255 | 0.9195 |
-| scratch | 0.4307 | 0.5570 | 0.4858 | 0.366 | 0.5190 | 0.4690 | 0.8860 |
-| crack | 0.2833 | 0.2429 | 0.2615 | 0.195 | 0.2236 | 0.1775 | 0.6571 |
-| glass shatter | 0.5812 | 0.9577 | 0.7234 | 0.693 | 0.9063 | 0.8975 | 1.0000 |
-| lamp broken | 0.7101 | 0.7101 | 0.7101 | 0.292 | 0.7421 | 0.7486 | 0.9420 |
-| tire flat | 0.8667 | 0.8125 | 0.8387 | 0.709 | 0.9044 | 0.8877 | 0.9688 |
+| dent | 0.4948 | 0.6017 | 0.5430 | 0.361 | 0.5471 | 0.5258 | 0.9237 |
+| scratch | 0.4343 | 0.5603 | 0.4893 | 0.366 | 0.5157 | 0.4692 | 0.8958 |
+| crack | 0.2833 | 0.2429 | 0.2615 | 0.188 | 0.2267 | 0.1764 | 0.6571 |
+| glass shatter | 0.5812 | 0.9577 | 0.7234 | 0.694 | 0.9067 | 0.8980 | 1.0000 |
+| lamp broken | 0.7101 | 0.7101 | 0.7101 | 0.286 | 0.7434 | 0.7495 | 0.9420 |
+| tire flat | 0.8667 | 0.8125 | 0.8387 | 0.707 | 0.9046 | 0.9026 | 0.9688 |
 
 ## Damage detection — Mask R-CNN
 
@@ -67,10 +67,10 @@ _Source (excluded): `runs/parts_seg_v1_eval_test_excl/metrics.json`_
 | Mask mAP@0.5:0.95 (test, near-duplicates excluded, n=12 removed) | 0.7681 |
 | Mask mAP@0.5 (test, near-duplicates excluded, n=12 removed) | 0.9354 |
 | Macro F1 @ 0.25 (mask, excluded) | 0.8756 |
-| Inference latency (ms/image, mean) | 18.8 |
-| Inference latency (ms/image, p95) | 26.0 |
+| Inference latency (ms/image, mean) | 16.7 |
+| Inference latency (ms/image, p95) | 22.3 |
 | Parameters (total) | 3,259,234 |
-| Peak VRAM (MB) | n/a |
+| Peak VRAM (MB) | 227.0 |
 | Epochs (requested / this run) | 50 / 50 |
 | Best epoch | 49 |
 | Early stopped | False |
@@ -99,20 +99,20 @@ _Source (excluded): `runs/vehide_seg_v1_eval_test_excl/metrics.json`_
 |---|---|
 | Model | yolov8s-seg.pt |
 | Box mAP@0.5 | 0.4712 |
-| Box mAP@0.5:0.95 | 0.3027 |
-| Mask mAP@0.5 | 0.4287 |
-| Mask mAP@0.5:0.95 | 0.2347 |
-| Mask IoU (true positives) | 0.7539 |
-| Mask IoU (per GT, misses = 0) | 0.2537 |
-| Macro P / R / F1 @ conf 0.25 (mask) | 0.5424 / 0.4425 / 0.4825 |
+| Box mAP@0.5:0.95 | 0.3030 |
+| Mask mAP@0.5 | 0.4283 |
+| Mask mAP@0.5:0.95 | 0.2344 |
+| Mask IoU (true positives) | 0.7543 |
+| Mask IoU (per GT, misses = 0) | 0.2536 |
+| Macro P / R / F1 @ conf 0.25 (mask) | 0.5398 / 0.4420 / 0.4810 |
 | Evaluated on | test |
-| Mask mAP@0.5:0.95 (test, near-duplicates excluded, n=45 removed) | 0.2331 |
-| Mask mAP@0.5 (test, near-duplicates excluded, n=45 removed) | 0.4277 |
-| Macro F1 @ 0.25 (mask, excluded) | 0.4824 |
-| Inference latency (ms/image, mean) | 34.7 |
-| Inference latency (ms/image, p95) | 35.2 |
+| Mask mAP@0.5:0.95 (test, near-duplicates excluded, n=45 removed) | 0.2328 |
+| Mask mAP@0.5 (test, near-duplicates excluded, n=45 removed) | 0.4272 |
+| Macro F1 @ 0.25 (mask, excluded) | 0.4809 |
+| Inference latency (ms/image, mean) | 29.5 |
+| Inference latency (ms/image, p95) | 41.8 |
 | Parameters (total) | 11,782,309 |
-| Peak VRAM (MB) | n/a |
+| Peak VRAM (MB) | 294.1 |
 | Epochs (requested / this run) | 50 / 48 |
 | Best epoch | 48 |
 | Early stopped | False |
@@ -122,13 +122,13 @@ _Source (excluded): `runs/vehide_seg_v1_eval_test_excl/metrics.json`_
 
 | Class | Precision@0.25 | Recall@0.25 | F1@0.25 | Best-F1 conf | Box AP50 | Mask AP50 | Max recall |
 |---|---|---|---|---|---|---|---|
-| scratch | 0.3815 | 0.2200 | 0.2791 | 0.213 | 0.2821 | 0.2029 | 0.6166 |
-| dent | 0.4518 | 0.2442 | 0.3170 | 0.198 | 0.2523 | 0.2392 | 0.6392 |
-| torn | 0.4193 | 0.3072 | 0.3546 | 0.263 | 0.3068 | 0.2796 | 0.6467 |
-| broken_lamp | 0.5474 | 0.4286 | 0.4808 | 0.254 | 0.5065 | 0.4133 | 0.6486 |
-| missing_part | 0.6789 | 0.6325 | 0.6549 | 0.260 | 0.6582 | 0.6244 | 0.8063 |
-| punctured | 0.5354 | 0.5096 | 0.5222 | 0.347 | 0.5035 | 0.4900 | 0.7500 |
-| shattered_glass | 0.7826 | 0.7557 | 0.7689 | 0.389 | 0.7886 | 0.7514 | 0.8511 |
+| scratch | 0.3821 | 0.2206 | 0.2797 | 0.203 | 0.2830 | 0.2034 | 0.6155 |
+| dent | 0.4481 | 0.2428 | 0.3149 | 0.175 | 0.2533 | 0.2393 | 0.6379 |
+| torn | 0.4202 | 0.3072 | 0.3549 | 0.316 | 0.3073 | 0.2799 | 0.6482 |
+| broken_lamp | 0.5438 | 0.4257 | 0.4776 | 0.254 | 0.5028 | 0.4112 | 0.6429 |
+| missing_part | 0.6748 | 0.6325 | 0.6529 | 0.265 | 0.6571 | 0.6231 | 0.8006 |
+| punctured | 0.5336 | 0.5096 | 0.5213 | 0.346 | 0.5060 | 0.4902 | 0.7564 |
+| shattered_glass | 0.7765 | 0.7557 | 0.7660 | 0.393 | 0.7888 | 0.7513 | 0.8511 |
 
 ## Severity classifier
 
