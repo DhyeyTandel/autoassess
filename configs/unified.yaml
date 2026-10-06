@@ -1,0 +1,82 @@
+# =============================================================================
+# configs/unified.yaml — joint CarDD + VehiDE dataset (9 classes, YOLOv8-seg)
+#
+# Ultralytics dataset YAML plus our own keys (sources, oversample,
+# labelled_classes) consumed by src/autoassess/data/unify.py, which builds
+# data/processed/unified/ from the two processed datasets.
+#
+# PARTIAL-LABEL CAVEAT: each source only annotates its own classes. A CarDD
+# photo with a torn panel has NO torn label, and a VehiDE photo with a flat
+# tyre has no tire-flat label, so those regions are unlabelled background and
+# act as false-negative noise at training time. Evaluation must therefore only
+# score a class on images from sources that annotate it — see
+# `labelled_classes` below, which the evaluator uses to mask classes per source.
+#
+# Training uses a list file (train.txt) rather than a directory so that
+# oversampling is done by repeating lines (Ultralytics keeps duplicates).
+# =============================================================================
+
+path: ../data/processed/unified     # relative to this file's location; resolved at runtime
+train: train.txt
+val: images/val
+test: images/test                   # combined; per-source: images/test_cardd, images/test_vehide
+
+# Spelling follows CarDD (with spaces) for the shared classes.
+names:
+  0: dent
+  1: scratch
+  2: crack
+  3: glass shatter
+  4: lamp broken
+  5: tire flat
+  6: torn
+  7: missing part
+  8: punctured
+
+# Per source: dataset YAML (relative to project root) and an explicit
+# source class name -> unified class name map. unify.py fails if a map does not
+# cover every source class or targets a name not in `names`.
+sources:
+  cardd:
+    config: configs/cardd.yaml
+    class_map:
+      dent: dent
+      scratch: scratch
+      crack: crack
+      glass shatter: glass shatter
+      lamp broken: lamp broken
+      tire flat: tire flat
+  vehide:
+    config: configs/vehide.yaml
+    class_map:
+      scratch: scratch
+      dent: dent
+      torn: torn
+      broken_lamp: lamp broken
+      missing_part: missing part
+      punctured: punctured
+      shattered_glass: glass shatter
+
+# Training-set repeat factor per source (CarDD is much smaller than VehiDE).
+oversample:
+  cardd: 3
+  vehide: 1
+
+# Unified class names each source annotates (classes outside this list are
+# unlabelled, not absent, for that source's images).
+labelled_classes:
+  cardd:
+    - dent
+    - scratch
+    - crack
+    - glass shatter
+    - lamp broken
+    - tire flat
+  vehide:
+    - dent
+    - scratch
+    - glass shatter
+    - lamp broken
+    - torn
+    - missing part
+    - punctured

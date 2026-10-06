@@ -68,6 +68,7 @@ autoassess-associate      = "autoassess.infer.associate:main"
 autoassess-pipeline       = "autoassess.infer.pipeline:main"
 autoassess-report         = "autoassess.eval.report:main"
 autoassess-convert-vehide = "autoassess.data.convert_vehide:main"
+autoassess-unify          = "autoassess.data.unify:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autoassess"]
