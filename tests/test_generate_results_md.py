@@ -212,3 +212,76 @@ def test_excl_dirs_not_listed_as_other_runs(
     tail = md[md.index("## Other runs found"):]
     assert "`other_run`" in tail
     assert "orphan_eval_test_excl" not in tail
+
+
+SEV_M = {
+    "model": "sev",
+    "circularity_warning": "heuristic-derived labels",
+    "val_accuracy_vs_heuristic": 0.8,
+    "epochs_requested": 5,
+    "epochs_run_this_invocation": 5,
+    "best_epoch": 3,
+    "model_info": {"params_total": 1000},
+    "wall_time_seconds_total": 12.0,
+}
+SEV_RAW = {
+    "labels": ["minor", "moderate", "severe"],
+    "n_images": 374,
+    "learned_accuracy_vs_heuristic": 0.7406417112299465,
+    "learned_confusion_matrix": [[12, 29, 1], [9, 123, 23], [2, 33, 142]],
+}
+
+
+def _write_sev_test(figs: Path, raw: dict[str, object] | None = None, png: bool = True) -> None:
+    d = figs / "severity_compare_test"
+    d.mkdir(parents=True)
+    (d / "severity_comparison_raw.json").write_text(
+        json.dumps(SEV_RAW if raw is None else raw), encoding="utf-8"
+    )
+    if png:
+        (d / "severity_confusion_matrices.png").write_bytes(b"x")
+
+
+def test_severity_section_reports_test_agreement(tmp_path: Path) -> None:
+    mod = _load_script()
+    _write_sev_test(tmp_path)
+    sec = mod.render_severity_section(SEV_M, tmp_path)
+    assert "Test agreement with heuristic (n=374)" in sec
+    assert "0.7406" in sec
+    assert "| Class | Precision | Recall vs heuristic |" in sec
+    assert "| minor | 0.522 | 0.286 |" in sec
+    assert "| moderate | 0.665 | 0.794 |" in sec
+    assert "| severe | 0.855 | 0.802 |" in sec
+    assert "not real-world accuracy" in sec
+
+
+def test_severity_per_class_handles_zero_denominators(tmp_path: Path) -> None:
+    mod = _load_script()
+    raw = dict(SEV_RAW, learned_confusion_matrix=[[0, 0, 0], [0, 5, 0], [0, 0, 0]])
+    _write_sev_test(tmp_path, raw)
+    sec = mod.render_severity_section(SEV_M, tmp_path)
+    assert "| minor | n/a | n/a |" in sec
+    assert "| moderate | 1.000 | 1.000 |" in sec
+
+
+def test_severity_section_unchanged_without_test_json(tmp_path: Path) -> None:
+    mod = _load_script()
+    sec = mod.render_severity_section(SEV_M, tmp_path)
+    assert "Test agreement" not in sec
+    assert "Precision" not in sec
+    assert sec.rstrip().endswith("Train label distribution (heuristic-derived): {}")
+
+
+def test_severity_figure_link_switches(tmp_path: Path) -> None:
+    mod = _load_script()
+    smoke = tmp_path / "severity_compare"
+    smoke.mkdir()
+    (smoke / "severity_confusion_matrices.png").write_bytes(b"x")
+    old = mod.render_figures_section(tmp_path)
+    assert "severity_smoke" in old
+    assert "severity_compare/severity_confusion_matrices.png" in old
+    _write_sev_test(tmp_path)
+    new = mod.render_figures_section(tmp_path)
+    assert "severity_compare_test/severity_confusion_matrices.png" in new
+    assert "severity_v1, test split, vs heuristic labels" in new
+    assert "severity_smoke" not in new
