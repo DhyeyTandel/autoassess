@@ -120,3 +120,44 @@ tidy earlier entries.
 - The fixed `/tmp` path also let concurrent requests overwrite each other's upload. A worker had flagged this earlier, and it was fixed in the same change.
 
 **Scale/limits** — Any detection within about 0.01 of a cutoff is unstable across re-encodes, resizes and phone-camera processing. This applies to the parts model at 0.15 as much as to VehiDE at 0.07. Uploads are still decoded in full and written once per request, which is fine for a single-user demo.
+
+## [2026-10-06] Demo UI: design system, sensitivity control, results-after-run layout
+
+**Problem** — The demo looked like stock Gradio:
+- bold Helvetica and generic colours, outside the owner's design system;
+- an empty full-screen result panel on phones before any run;
+- a disclaimer far from the verdict it qualifies;
+- the VehiDE cutoff only reachable through an env var;
+- result images about 65% of a phone's width.
+
+**Options considered**
+- Restyle in place with Gradio theme + `css=`, versus porting the UI to a custom front-end (e.g. FastAPI + HTML). Kept Gradio: the pipeline wiring, upload handling and tests already exist, and a port would be a rewrite for a course demo.
+- Results layout: keep side-by-side panels always, or reveal results after a run. The user chose reveal-after-run.
+- Sample photos and a findings table were offered; the user did not pick them.
+
+**Decision**
+- **Theme and type:** design-system tokens on `:root` and `.dark`, with Gradio's own variables remapped to them; Newsreader display, Sofia Sans body, JetBrains Mono eyebrows and metrics.
+- **Components:** square hairline cards, an orange pill button, and a sensitivity `gr.Radio` (High recall 0.07 / Standard 0.15) styled as pill segments, with the chosen setting recorded in the result JSON.
+- **Layout:** the results column is hidden until a successful run, then a `.success` step calls `scrollIntoView` on it.
+- **Verdict card:** a coloured stripe, with the disclaimer moved inside the card.
+- **Chrome removed:** upload-only image input (no webcam or clipboard), and `footer_links=["settings"]`.
+- **Out-of-scope rules:** CSS for elements outside the app content goes through `launch(head=HEAD_STYLE)`.
+
+**Tradeoff accepted**
+- The look depends on Gradio 6.22 internals (`data-testid="block-label"`, the `.form` wrapper, `.main` padding, footer `.divider`). A Gradio upgrade can silently undo parts of it.
+- The tests check the CSS strings and the Blocks config, not rendering; visual correctness was only checked by hand in a browser.
+- `head=` only applies via `python app.py` (`launch`), not when the Blocks object is mounted elsewhere.
+
+**What went wrong**
+- **Unreadable image labels.** The badges had a transparent background over the photo. CarDD sky showed through as teal, which at first looked like a wrong colour token.
+- **`scroll_to_output=True` did nothing.** Gradio skips the scroll when the output is technically in view: the results' top edge was at y=768 of 812.
+- **Explicit scroll looked broken in testing.** Smooth `scrollIntoView` never moved in the preview pane because the tab was `visibilityState: hidden` (2 animation frames per second). It worked with `behavior: 'auto'`, and an instrumented run confirmed the hook fires after assess.
+- **The Sensitivity fill was on the wrong element.** It came from Gradio's `.form` wrapper, not the radio's fieldset; fixed with `.form:has(> .aa-sens)`.
+- **Two fixes never applied.** Gradio rewrites every `css=` selector to `.gradio-container.gradio-container-6-22-0 .contain …`, so the phone padding rule for `.main` (outside `.contain`) and the footer rule could never match. The diagnosis came from reading the browser's actual rule list.
+- **Wrong divider targeted.** The first footer rule `footer div:has(+ .settings)` hit the already-hidden second divider, not the visible one.
+- **Odd console warning.** `@import rules are not allowed here` was logged for the Google Fonts import, yet all three fonts loaded. [unverified] I didn't confirm which path loads Newsreader.
+
+**Scale/limits**
+- At 375px, result images are 315px wide (was 243). No horizontal scroll at 375 or 1024.
+- Dark mode was checked only at phone width.
+- Untested on real phones, Safari or Firefox; Chrome emulation only.
