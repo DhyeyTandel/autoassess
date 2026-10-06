@@ -3,7 +3,8 @@
 Scores any trained checkpoint (Ultralytics YOLO-seg or torchvision Mask R-CNN)
 on one split of a processed dataset with the same pipeline the trainers use,
 and writes a schema-v2 ``metrics.json`` to ``<output_root>/<name>_eval_<split>/``
-(``..._eval_<split>_excl/`` when ``--exclude-list`` is given)
+(``..._eval_<split>_excl/`` when ``--exclude-list`` is given, plus ``_cls<k>`` with
+``--eval-classes``)
 (or to ``output_dir/metrics.json`` when the trainers call it, see ``run_evaluation``).
 Training-time fields are carried over read-only from ``<weights run dir>/metrics.json``
 (or the ``training_info`` argument); peak VRAM is measured over inference only.
@@ -21,12 +22,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import torch
 
-from autoassess.eval.coco_eval import load_class_names
+from autoassess.eval.coco_eval import load_class_names, resolve_class_subset
 from autoassess.eval.metrics import (
     build_metrics_json,
     count_params,
@@ -50,7 +52,6 @@ log = get_logger(__name__)
 DEFAULT_SEED = 42
 MASKRCNN_MODEL_ID = "maskrcnn_resnet50_fpn_v2"
 YOLO_MODEL_TYPE = "yolov8-seg"
-SPLITS = ("train", "val", "test")
 
 # Fields copied (read-only) from a sibling training metrics.json.
 _TRAINING_KEYS = (
@@ -165,6 +166,34 @@ def _check_split(images_dir: Path, labels_dir: Path) -> None:
         raise FileNotFoundError(f"Label directory for split does not exist: {labels_dir}")
 
 
+def load_eval_classes_from_yaml(path: Path, source: str) -> list[str]:
+    """Read ``labelled_classes[source]`` from a unified/joint dataset YAML."""
+    from omegaconf import OmegaConf
+
+    raw = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+    labelled = raw.get("labelled_classes") if isinstance(raw, dict) else None
+    if not isinstance(labelled, dict):
+        raise ValueError(f"{path} has no 'labelled_classes' key")
+    if source not in labelled:
+        raise ValueError(
+            f"source {source!r} not in labelled_classes of {path}; "
+            f"available: {sorted(str(k) for k in labelled)}"
+        )
+    return [str(n) for n in labelled[source]]
+
+
+def resolve_eval_classes(args: argparse.Namespace) -> list[str] | None:
+    """Class names from ``--eval-classes`` or ``--eval-classes-from``, else None."""
+    if args.eval_classes is not None:
+        names = [n.strip() for n in args.eval_classes.split(",") if n.strip()]
+        if not names:
+            raise ValueError("--eval-classes is empty")
+        return names
+    if args.eval_classes_from is not None:
+        return load_eval_classes_from_yaml(args.eval_classes_from, args.eval_source)
+    return None
+
+
 def load_exclude_list(path: Path) -> frozenset[str]:
     """Read image basenames (one per line) to leave out of scoring.
 
@@ -195,6 +224,7 @@ def run_evaluation(
     model_type_label: str | None = None,
     model_id: str | None = None,
     exclude_list: Path | None = None,
+    eval_classes: Sequence[str] | None = None,
 ) -> Path:
     """Evaluate ``weights`` on ``split`` and write metrics.json; return its path.
 
@@ -217,12 +247,27 @@ def run_evaluation(
     ``<output_root>/<run_name>_eval_<split>_excl`` and metrics.json gets an
     ``exclusion`` block; ``eval_split`` stays the plain split name. Names not in
     the split are warned about; if none exist a ValueError is raised.
+
+    ``split`` is any directory name under ``images/`` (e.g. ``test_cardd``).
+    ``eval_classes`` (class names, validated against the dataset config) scores
+    only those classes: other classes' GT and predictions are dropped before
+    COCO evaluation, and mAP, per-class and macro metrics cover the subset.
+    Output then defaults to ``..._eval_<split>_cls<k>`` and metrics.json records
+    ``eval_classes``. YOLO only; Mask R-CNN raises NotImplementedError.
     """
     if model_type not in ("yolo", "maskrcnn"):
         raise ValueError(f"model_type must be 'yolo' or 'maskrcnn', got {model_type!r}")
 
+    if eval_classes is not None and model_type == "maskrcnn":
+        raise NotImplementedError(
+            "--eval-classes is only supported for YOLO checkpoints; the Mask R-CNN "
+            "evaluation path (train_maskrcnn.evaluate_split) has no class filtering."
+        )
+
     name = run_name or _default_run_name(weights)
     suffix = "_excl" if exclude_list is not None else ""
+    if eval_classes is not None:
+        suffix += f"_cls{len(set(eval_classes))}"
     run_dir = (
         output_dir if output_dir is not None else output_root / f"{name}_eval_{split}{suffix}"
     )
@@ -231,6 +276,9 @@ def run_evaluation(
     seed_everything(seed)
 
     class_names = load_class_names(dataset_config)
+    scored_classes: list[str] | None = None
+    if eval_classes is not None:
+        scored_classes = resolve_class_subset(class_names, eval_classes)
     processed_dir = resolve_processed_dir(dataset_config)
     images_dir = processed_dir / "images" / split
     labels_dir = processed_dir / "labels" / split
@@ -281,7 +329,7 @@ def run_evaluation(
         reset_peak_vram(torch_device)
         eval_result = run_yolo_coco_eval(
             eval_model, images_dir, labels_dir, class_names, imgsz=imgsz, device=device,
-            exclude=exclude,
+            exclude=exclude, class_subset=scored_classes,
         )
         latency = measure_yolo_latency(
             eval_model, images_dir, imgsz, n_images=latency_images, device=device,
@@ -327,7 +375,7 @@ def run_evaluation(
         run_name=name,
         model_type=model_type_label or model_type_field,
         model=model_id or default_model_id,
-        class_names=class_names,
+        class_names=class_names if scored_classes is None else scored_classes,
         epochs_requested=train_fields.get("epochs_requested"),
         epochs_run_this_invocation=train_fields.get("epochs_run_this_invocation"),
         batch=train_fields.get("batch"),
@@ -345,6 +393,7 @@ def run_evaluation(
         model_info=model_info,
     )
     payload["exclusion"] = exclusion
+    payload["eval_classes"] = scored_classes
     metrics_path = write_metrics_json(run_dir, payload)
 
     m = payload["metrics"]
@@ -368,8 +417,9 @@ def parse_args() -> argparse.Namespace:
                    help="Model family. Default: auto-detect from the checkpoint.")
     p.add_argument("--dataset-config", type=Path, default=Path("configs/cardd.yaml"),
                    help="Dataset YAML (class names, processed data root).")
-    p.add_argument("--split", type=str, choices=list(SPLITS), default="test",
-                   help="Split to score (default: test).")
+    p.add_argument("--split", type=str, default="test",
+                   help="Split directory name under images/ to score, e.g. val, test or "
+                        "test_cardd (default: test).")
     p.add_argument("--name", type=str, default=None,
                    help="Run name; output goes to <output_root>/<name>_eval_<split>/. "
                         "Default: the weights' run directory name.")
@@ -393,7 +443,20 @@ def parse_args() -> argparse.Namespace:
                         "lines ignored) to leave out of scoring, e.g. the flagged_test list "
                         "from scripts/split_audit.py. Output goes to "
                         "<output_root>/<name>_eval_<split>_excl/.")
-    return p.parse_args()
+    grp = p.add_mutually_exclusive_group()
+    grp.add_argument("--eval-classes", type=str, default=None,
+                     help="Comma-separated class names to score, e.g. "
+                          "'dent,scratch,crack'. Other classes' GT and predictions are "
+                          "dropped. YOLO only. Output dir gets a _cls<k> suffix.")
+    grp.add_argument("--eval-classes-from", type=Path, default=None,
+                     help="Unified dataset YAML with labelled_classes: {<source>: [...]}; "
+                          "requires --eval-source. Mutually exclusive with --eval-classes.")
+    p.add_argument("--eval-source", type=str, default=None,
+                   help="Key under labelled_classes in --eval-classes-from (e.g. cardd).")
+    args = p.parse_args()
+    if (args.eval_classes_from is None) != (args.eval_source is None):
+        p.error("--eval-classes-from and --eval-source must be given together")
+    return args
 
 
 def main() -> None:
@@ -402,6 +465,7 @@ def main() -> None:
     output_root = Path(str(cfg.project.output_root))
     seed = int(cfg.project.get("seed", DEFAULT_SEED))
     model_type = args.model_type or detect_model_type(args.weights)
+    eval_classes = resolve_eval_classes(args)
 
     run_evaluation(
         weights=args.weights,
@@ -417,6 +481,7 @@ def main() -> None:
         model_type_label=args.model_type_label,
         model_id=args.model_id,
         exclude_list=args.exclude_list,
+        eval_classes=eval_classes,
     )
 
 

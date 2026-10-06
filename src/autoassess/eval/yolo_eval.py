@@ -10,13 +10,18 @@ identically regardless of which dataset they were trained on.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from autoassess.eval.coco_eval import build_coco_ground_truth, run_coco_eval
+from autoassess.eval.coco_eval import (
+    build_coco_ground_truth,
+    resolve_class_subset,
+    run_coco_eval,
+)
 from autoassess.eval.metrics import measure_inference_latency
 from autoassess.eval.scoring import OPERATING_CONF, SCORING_CONF_THRESHOLD, SCORING_MAX_DETS
 
@@ -102,9 +107,13 @@ def collect_yolo_detections(
     coco_gt_dict: dict[str, Any],
     imgsz: int = 640,
     device: str | None = None,
+    class_subset: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Run `eval_model` over every image in `coco_gt_dict` and return
     COCO-format detections.
+
+    With `class_subset` (class names), predictions of any other class are
+    dropped; the kept category ids are looked up by name in `coco_gt_dict`.
 
     Inference uses the scoring settings (`SCORING_CONF_THRESHOLD`,
     `SCORING_MAX_DETS`) so the full PR curve reaches pycocotools, and the
@@ -113,6 +122,11 @@ def collect_yolo_detections(
     Ultralytics picks its own default device.
     """
     from pycocotools import mask as mask_utils
+
+    keep_ids: set[int] | None = None
+    if class_subset is not None:
+        wanted = set(class_subset)
+        keep_ids = {c["id"] for c in coco_gt_dict["categories"] if c["name"] in wanted}
 
     file_name_to_id = {img["file_name"]: img["id"] for img in coco_gt_dict["images"]}
 
@@ -142,6 +156,8 @@ def collect_yolo_detections(
         ):
             if poly_xy.shape[0] < 3:
                 continue
+            if keep_ids is not None and int(cls) + 1 not in keep_ids:
+                continue
             rle = polygon_xy_to_rle(poly_xy, width, height)
             bbox = mask_utils.toBbox(rle).tolist()
             detections.append({
@@ -162,6 +178,7 @@ def run_yolo_coco_eval(
     imgsz: int = 640,
     device: str | None = None,
     exclude: frozenset[str] = frozenset(),
+    class_subset: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Run inference over every image in `images_dir` (minus `exclude`) and score the
     predictions against COCO ground truth reconstructed from the converted
@@ -170,10 +187,21 @@ def run_yolo_coco_eval(
 
     Predictions are made at the scoring threshold (see
     `autoassess.eval.scoring`), not Ultralytics' default conf=0.25.
+
+    `class_subset` (class names) restricts scoring to those classes: other
+    classes' GT and predictions are dropped before COCO evaluation and the
+    result covers the subset only (in dataset order).
     """
-    coco_gt_dict = build_coco_ground_truth(images_dir, labels_dir, class_names, exclude)
-    detections = collect_yolo_detections(eval_model, images_dir, coco_gt_dict, imgsz, device)
-    return run_coco_eval(coco_gt_dict, detections, class_names)
+    coco_gt_dict = build_coco_ground_truth(
+        images_dir, labels_dir, class_names, exclude, class_subset
+    )
+    detections = collect_yolo_detections(
+        eval_model, images_dir, coco_gt_dict, imgsz, device, class_subset
+    )
+    scored_names = (
+        class_names if class_subset is None else resolve_class_subset(class_names, class_subset)
+    )
+    return run_coco_eval(coco_gt_dict, detections, scored_names)
 
 
 def polygon_xy_to_rle(poly_xy: np.ndarray, width: int, height: int) -> dict[str, Any]:
