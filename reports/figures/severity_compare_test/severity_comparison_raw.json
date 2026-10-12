@@ -1,0 +1,44 @@
+{
+  "heuristic_confusion_matrix": [
+    [
+      42,
+      0,
+      0
+    ],
+    [
+      0,
+      155,
+      0
+    ],
+    [
+      0,
+      0,
+      177
+    ]
+  ],
+  "learned_confusion_matrix": [
+    [
+      12,
+      29,
+      1
+    ],
+    [
+      9,
+      123,
+      23
+    ],
+    [
+      2,
+      33,
+      142
+    ]
+  ],
+  "learned_accuracy_vs_heuristic": 0.7406417112299465,
+  "labels": [
+    "minor",
+    "moderate",
+    "severe"
+  ],
+  "n_images": 374,
+  "circularity_warning": "Every label compared below is heuristic-derived (configs/severity.yaml), not ground truth \u2014 CarDD has no severity annotation. This evaluation measures agreement with the heuristic, not real-world grading accuracy. See this script's module docstring, and autoassess/train/train_severity.py, for the full circularity discussion and what fixing it requires (real adjuster labels)."
+}
