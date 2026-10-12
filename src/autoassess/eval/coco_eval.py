@@ -12,6 +12,7 @@ training framework consumed them.
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,22 @@ def load_class_names(dataset_config_path: Path) -> list[str]:
     ds_cfg = OmegaConf.load(dataset_config_path)
     names: dict[int, str] = OmegaConf.to_container(ds_cfg.names, resolve=True)  # type: ignore[assignment]
     return [names[i] for i in sorted(names, key=int)]
+
+
+def resolve_class_subset(class_names: list[str], class_subset: Sequence[str]) -> list[str]:
+    """Validate ``class_subset`` against ``class_names``; return it in dataset order.
+
+    Raises ValueError for an empty subset, or for names not in ``class_names``.
+    """
+    if not class_subset:
+        raise ValueError("class subset is empty; give at least one class name")
+    unknown = sorted(set(class_subset) - set(class_names))
+    if unknown:
+        raise ValueError(
+            f"unknown class name(s) {unknown}; dataset classes are {class_names}"
+        )
+    wanted = set(class_subset)
+    return [n for n in class_names if n in wanted]
 
 
 def _polygon_to_rle(
@@ -50,6 +67,7 @@ def build_coco_ground_truth(
     labels_dir: Path,
     class_names: list[str],
     exclude: frozenset[str] = frozenset(),
+    class_subset: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct a COCO-format ground-truth dict from a converted YOLO-seg
     split. Category ids are 1-indexed (COCO convention), in the same order
@@ -59,10 +77,19 @@ def build_coco_ground_truth(
     Images whose file name (e.g. ``0001.jpg``) is in ``exclude`` are skipped
     along with their annotations; every consumer iterates this dict's images,
     so they are skipped downstream too.
+
+    ``class_subset`` (class names) keeps only those categories and drops the
+    annotations of every other class; images stay, so a model's false positives
+    on them still count. Category ids keep their full-dataset value (index + 1)
+    so detections need no remapping.
     """
+    kept: set[str] | None = None
+    if class_subset is not None:
+        kept = set(resolve_class_subset(class_names, class_subset))
     categories = [
         {"id": i + 1, "name": name, "supercategory": "damage"}
         for i, name in enumerate(class_names)
+        if kept is None or name in kept
     ]
 
     images: list[dict[str, Any]] = []
@@ -91,6 +118,8 @@ def build_coco_ground_truth(
                 continue
             parts = line.split()
             class_index = int(parts[0])
+            if kept is not None and class_names[class_index] not in kept:
+                continue
             poly = [float(v) for v in parts[1:]]
             rle = _polygon_to_rle(poly, width, height)
 
