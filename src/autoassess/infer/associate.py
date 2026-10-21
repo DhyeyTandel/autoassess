@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,15 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+@lru_cache(maxsize=8)
+def _load_yolo(weights: str) -> Any:  # noqa: ANN401
+    """Load a YOLO checkpoint once per weights path (cached for the process)."""
+    from ultralytics import YOLO  # type: ignore[attr-defined]
+
+    log.info("Loading model %s", weights)
+    return YOLO(weights)
+
+
 def run_yolo_seg_inference(
     weights_path: Path, source: Path, conf: float, device: str
 ) -> list[MaskInstance]:
@@ -123,11 +133,10 @@ def run_yolo_seg_inference(
     instances as framework-agnostic MaskInstance objects with RLE masks at
     the image's original resolution (not the model's input resolution)."""
     from pycocotools import mask as mask_utils
-    from ultralytics import YOLO  # type: ignore[attr-defined]
 
     from autoassess.eval.yolo_eval import polygon_xy_to_rle
 
-    model: Any = YOLO(str(weights_path))
+    model: Any = _load_yolo(str(weights_path))
     result = model.predict(str(source), conf=conf, device=device, verbose=False)[0]
 
     instances: list[MaskInstance] = []

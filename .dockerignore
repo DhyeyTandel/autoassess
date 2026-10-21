@@ -12,3 +12,5 @@ __pycache__
 *.zip
 *.pt
 .claude
+frontend/node_modules
+frontend/dist

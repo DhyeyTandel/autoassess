@@ -4,7 +4,7 @@
     {
       "name": "autoassess-demo",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["AUTOASSESS_DEVICE=mps", "uv", "run", "python", "app.py"],
+      "runtimeArgs": ["AUTOASSESS_DEVICE=mps", "uv", "run", "autoassess-web"],
       "port": 7860
     }
   ]
