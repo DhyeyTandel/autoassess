@@ -10,13 +10,15 @@ from PIL import Image, ImageDraw, ImageFont
 
 from autoassess.infer.associate import MaskInstance
 
-# Severity/triage palette is semantic (maps to real risk), kept separate from
-# the UI's accent color. RGB tuples feed PIL overlay drawing; hex feeds CSS.
-SEVERITY_COLORS = {"minor": (240, 200, 50), "moderate": (240, 140, 30), "severe": (220, 50, 50)}
-PART_COLOR = (60, 140, 230)
+# Severity palette is semantic (maps to real risk), kept separate from the UI's
+# accent color. RGB tuples feed PIL overlay drawing. All three are dark enough
+# that white label text clears WCAG AA (>= 4.5:1) on each; the old dark text
+# would have dropped to about 3:1 on them.
+SEVERITY_COLORS = {"minor": (26, 127, 55), "moderate": (143, 112, 0), "severe": (207, 34, 46)}
+PART_COLOR = (100, 116, 139)  # neutral slate: part context must not compete with severity
 
 _FALLBACK_COLOR = (150, 150, 150)
-_LABEL_TEXT_COLOR = (30, 30, 30)
+_LABEL_TEXT_COLOR = (255, 255, 255)
 
 Box = tuple[float, float, float, float]
 
@@ -169,7 +171,7 @@ def draw_overlay(
     severities: list[str],
     parts_assigned: list[str],
 ) -> Image.Image:
-    """Fill part masks (light blue) and damage masks (colored by severity) into
+    """Fill part masks (slate) and damage masks (colored by severity) into
     one RGBA layer, draw damage outlines, composite once, then draw opaque
     severity-colored labels on the composited RGB image."""
     fill = np.zeros((*image.size[::-1], 4), dtype=np.uint8)

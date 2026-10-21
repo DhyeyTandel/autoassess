@@ -250,7 +250,7 @@ def test_assess_passes_sensitivity_cutoff(
 ) -> None:
     recorded = _stub_pipeline(app_module, tmp_path, monkeypatch, merged=True)
     mode = getattr(app_module, mode_attr)
-    _, result, _, _ = app_module.assess(_noisy_rgb(), mode)
+    _, _, _, result, _ = app_module.assess(_noisy_rgb(), mode)
     assert recorded["secondary_damage_conf"] == expected
     assert result["settings"] == {"sensitivity": mode, "secondary_conf": expected}
 
@@ -259,7 +259,7 @@ def test_assess_single_model_has_no_secondary(
     app_module: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorded = _stub_pipeline(app_module, tmp_path, monkeypatch, merged=False)
-    _, result, _, _ = app_module.assess(_noisy_rgb(), app_module.SENSITIVITY_STANDARD)
+    _, _, _, result, _ = app_module.assess(_noisy_rgb(), app_module.SENSITIVITY_STANDARD)
     assert recorded["secondary_damage_weights"] is None
     assert recorded["secondary_damage_conf"] is None
     assert result["settings"] == {"sensitivity": None, "secondary_conf": None}
@@ -283,7 +283,10 @@ def test_demo_has_sensitivity_radio_wired_to_submit(app_module: ModuleType) -> N
         if any(t[0] == submit_id and t[1] == "click" for t in d["targets"])
     ]
     assert len(deps) == 1
-    assert deps[0]["inputs"] == [app_module.image_input._id, radios[0]["id"]]
+    assess_dep = next(
+        d for d in app_module.demo.config["dependencies"] if d.get("trigger_after") == deps[0]["id"]
+    )
+    assert assess_dep["inputs"] == [app_module.image_input._id, radios[0]["id"]]
 
 
 def _triage(decision: str = "total_loss_review", **over: object) -> dict[str, Any]:
@@ -304,8 +307,8 @@ def test_assess_returns_results_visibility_update(
 ) -> None:
     _stub_pipeline(app_module, tmp_path, monkeypatch, merged=False)
     out = app_module.assess(_noisy_rgb(), app_module.SENSITIVITY_STANDARD)
-    assert len(out) == 4
-    assert out[3]["visible"] is True
+    assert len(out) == 5
+    assert out[4]["visible"] is True
 
 
 def test_results_column_hidden_at_load_and_wired_to_submit(app_module: ModuleType) -> None:
@@ -319,8 +322,11 @@ def test_results_column_hidden_at_load_and_wired_to_submit(app_module: ModuleTyp
         if any(t[0] == submit_id and t[1] == "click" for t in d["targets"])
     ]
     assert len(deps) == 1
-    assert results_id in deps[0]["outputs"]
-    assert len(deps[0]["outputs"]) == 4
+    # click -> show_status (status line only); assess is chained after it.
+    assess_dep = next(d for d in app_module.demo.config["dependencies"]
+                      if d.get("trigger_after") == deps[0]["id"])
+    assert results_id in assess_dep["outputs"]
+    assert len(assess_dep["outputs"]) == 5
 
 
 def _non_ascii_emoji(text: str) -> list[str]:
@@ -341,7 +347,7 @@ def test_triage_card_content_and_no_emoji(app_module: ModuleType, decision: str)
     label = app_module.TRIAGE_META[decision]["label"]
     assert label in html
     assert "heuristic, not adjuster-validated" in html
-    assert "VERDICT" in html
+    assert "VERDICT" not in html
     assert _non_ascii_emoji(html) == []
 
 
@@ -373,7 +379,8 @@ def test_submit_chains_client_side_scroll_to_results(app_module: ModuleType) -> 
     submit_dep = next(
         d for d in deps if any(t[0] == submit_id and t[1] == "click" for t in d["targets"])
     )
-    chained = [d for d in deps if d.get("trigger_after") == submit_dep["id"]]
+    assess_dep = next(d for d in deps if d.get("trigger_after") == submit_dep["id"])
+    chained = [d for d in deps if d.get("trigger_after") == assess_dep["id"] and d.get("js")]
     assert len(chained) == 1
     js = chained[0]["js"]
     assert js is not None

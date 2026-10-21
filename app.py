@@ -55,7 +55,7 @@ from autoassess.infer.pipeline import (
     TOTAL_LOSS_REVIEW,
     run_pipeline_with_masks,
 )
-from autoassess.infer.visualize import SEVERITY_COLORS, draw_overlay
+from autoassess.infer.visualize import draw_overlay
 
 pillow_heif.register_heif_opener()  # lets PIL.Image.open decode iPhone .heic/.heif uploads
 
@@ -150,51 +150,78 @@ PARTS_DATASET_CONFIG = Path("configs/carparts.yaml")
 SEVERITY_CONFIG = Path("configs/severity.yaml")
 DEVICE = os.environ.get("AUTOASSESS_DEVICE", "cpu")
 
+# hex is the light-mode colour; dark_hex is a lighter variant that stays legible
+# on the dark card. Status colours only, not accents; the human-review amber is
+# kept at hue > 45 deg so it never reads as orange.
 TRIAGE_META = {
-    AUTO_APPROVE: {"label": "Auto-approve", "hex": "#1E8A5A", "glyph": "check"},
-    HUMAN_REVIEW: {"label": "Flag for human review", "hex": "#B7791F", "glyph": "flag"},
-    TOTAL_LOSS_REVIEW: {"label": "Total-loss candidate", "hex": "#D0342C", "glyph": "alert"},
+    AUTO_APPROVE: {"label": "Auto-approve", "hex": "#1A7F37", "dark_hex": "#3FB950"},
+    HUMAN_REVIEW: {"label": "Flag for human review", "hex": "#8F7000", "dark_hex": "#E0C341"},
+    TOTAL_LOSS_REVIEW: {
+        "label": "Total-loss candidate",
+        "hex": "#CF222E",
+        "dark_hex": "#FF7B72",
+    },
 }
 
+_SEVERITY_ORDER = {"severe": 0, "moderate": 1, "minor": 2}
+_UNASSIGNED = "unassigned"
+
+
 def render_triage_card(triage: dict[str, Any]) -> str:
-    """Build the triage verdict as a square card with a left stripe in the verdict
-    colour. This is the one thing a reviewer scans for first, so it gets the
-    visual weight; the heuristic disclaimer lives inside it."""
+    """Build the triage verdict as a plain bordered panel: status dot and label,
+    then counts and total damaged area in secondary text, then the heuristic
+    disclaimer in muted text."""
     decision = triage["decision"]
-    meta = TRIAGE_META.get(decision, {"label": decision, "hex": "#7C7367", "glyph": "flag"})
-    counts = [
-        ("severe", triage["n_severe"], SEVERITY_COLORS["severe"]),
-        ("moderate", triage["n_moderate"], SEVERITY_COLORS["moderate"]),
-        ("minor", triage["n_minor"], SEVERITY_COLORS["minor"]),
-    ]
-    chips = "".join(
-        f'<span class="aa-chip" style="--chip:{_rgb_hex(rgb)}">'
-        f'<span class="aa-chip-dot"></span>{count} {name}</span>'
-        for name, count, rgb in counts
-        if count > 0
-    ) or (
-        '<span class="aa-chip aa-chip-muted">Nothing detected &mdash; '
-        "not the same as confirmed damage-free, verify manually</span>"
+    meta = TRIAGE_META.get(
+        decision, {"label": decision, "hex": "#71717A", "dark_hex": "#A1A1AA"}
     )
+    parts = [
+        f"{triage[key]} {name}"
+        for key, name in (
+            ("n_severe", "severe"),
+            ("n_moderate", "moderate"),
+            ("n_minor", "minor"),
+        )
+        if triage[key] > 0
+    ]
     n = triage["n_instances"]
+    if parts:
+        summary = (
+            f"{n} instance{'s' if n != 1 else ''} ({', '.join(parts)}) "
+            f"&middot; {triage['total_damaged_area_px']:,.0f} px total damaged"
+        )
+    else:
+        summary = "Nothing detected &mdash; not the same as confirmed damage-free, verify manually"
 
     return f"""
-<div class="aa-verdict" style="--verdict:{meta['hex']}">
-  <div class="aa-eyebrow">VERDICT</div>
-  <div class="aa-verdict-label">{meta['label']}</div>
-  <div class="aa-verdict-chips">{chips}</div>
-  <div class="aa-verdict-meta">
-    {n} instance{'s' if n != 1 else ''} &middot;
-    {triage['total_damaged_area_px']:,.0f} px total damaged
-  </div>
-  <div class="aa-verdict-note">▸ Severity and triage are heuristic, not adjuster-validated.
+<div class="aa-verdict" style="--verdict:{meta['hex']};--verdict-dark:{meta['dark_hex']}">
+  <div class="aa-verdict-label"><span class="aa-dot"></span>{meta['label']}</div>
+  <div class="aa-verdict-meta">{summary}</div>
+  <div class="aa-verdict-note">Severity and triage are heuristic, not adjuster-validated.
   Route decisions through human review.</div>
 </div>
 """.strip()
 
 
-def _rgb_hex(rgb: tuple[int, int, int]) -> str:
-    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+def instances_table(result: dict[str, Any]) -> list[list[str]]:
+    """Rows of [Damage, Panel, Severity, Confidence] for the results table (pure).
+
+    Sorted severe, moderate, minor, then confidence descending. Unassigned
+    panels show as an em dash; confidence is formatted to two decimals.
+    """
+    ordered = sorted(
+        result["instances"],
+        key=lambda r: (_SEVERITY_ORDER.get(r["severity"], len(_SEVERITY_ORDER)), -r["confidence"]),
+    )
+    return [
+        [
+            str(r["damage_type"]),
+            "—" if r["part"] == _UNASSIGNED else str(r["part"]),
+            str(r["severity"]),
+            f"{r['confidence']:.2f}",
+        ]
+        for r in ordered
+    ]
 
 
 def save_upload_lossless(image: Image.Image, directory: Path | None = None) -> Path:
@@ -230,9 +257,23 @@ def normalize_upload(image: Image.Image | None) -> Image.Image | None:
     return ImageOps.exif_transpose(image).convert("RGB")
 
 
+STATUS_TEXT = "Analysing photo, about 7 seconds."
+
+
+def show_status() -> dict[str, Any]:
+    """Reveal the plain status line; chained before `assess` so it shows while it runs."""
+    return gr.update(value=STATUS_TEXT, visible=True)
+
+
+def hide_status() -> dict[str, Any]:
+    """Hide the status line once `assess` has finished (also after an error)."""
+    return gr.update(value="", visible=False)
+
+
 def assess(
     image: Image.Image, sensitivity: str
-) -> tuple[Image.Image, dict[str, Any], str, dict[str, Any]]:
+) -> tuple[Image.Image, str, list[list[str]], dict[str, Any], dict[str, Any]]:
+    """Run the pipeline; returns overlay, triage HTML, instance rows, raw result, column update."""
     if image is None:
         raise gr.Error("Upload an image first.")
     required = [DAMAGE_WEIGHTS, PARTS_WEIGHTS]
@@ -280,38 +321,45 @@ def assess(
         "secondary_conf": secondary_conf,
     }
 
-    return overlay_image, result, render_triage_card(result["triage"]), gr.update(visible=True)
+    table_rows = instances_table(result)
+    return (
+        overlay_image,
+        render_triage_card(result["triage"]),
+        table_rows,
+        result,
+        gr.update(visible=True),
+    )
 
 
+_SYSTEM_FONT = (
+    "-apple-system",
+    "BlinkMacSystemFont",
+    "Segoe UI",
+    "Roboto",
+    "Helvetica Neue",
+    "Arial",
+    "sans-serif",
+)
+_MONO_FONT = ("ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace")
+
+# Plain family names, so no font is fetched from a third party.
 THEME = gr.themes.Base(
-    primary_hue=gr.themes.colors.orange,
-    neutral_hue=gr.themes.colors.stone,
+    primary_hue=gr.themes.colors.blue,
+    neutral_hue=gr.themes.colors.zinc,
     text_size=gr.themes.sizes.text_md,
     spacing_size=gr.themes.sizes.spacing_md,
     radius_size=gr.themes.sizes.radius_sm,
-    font=(
-        gr.themes.GoogleFont("Sofia Sans"),
-        "ui-sans-serif",
-        "Helvetica Neue",
-        "Arial",
-        "sans-serif",
-    ),
-    font_mono=(
-        gr.themes.GoogleFont("JetBrains Mono"),
-        "ui-monospace",
-        "SFMono-Regular",
-        "Menlo",
-        "monospace",
-    ),
+    font=_SYSTEM_FONT,
+    font_mono=_MONO_FONT,
 ).set(
-    button_primary_background_fill="#EE5308",
-    button_primary_background_fill_hover="#C24303",
-    button_primary_background_fill_dark="#EE5308",
-    button_primary_background_fill_hover_dark="#C24303",
+    button_primary_background_fill="#0051C3",
+    button_primary_background_fill_hover="#003D99",
+    button_primary_background_fill_dark="#4C9AFF",
+    button_primary_background_fill_hover_dark="#79B4FF",
     button_primary_text_color="#FFFFFF",
-    button_primary_text_color_dark="#FFFFFF",
-    button_primary_border_color="#EE5308",
-    button_primary_border_color_dark="#EE5308",
+    button_primary_text_color_dark="#0E0E10",
+    button_primary_border_color="#0051C3",
+    button_primary_border_color_dark="#4C9AFF",
 )
 
 # These rules live in a head <style> instead of CSS because Gradio prefixes every
@@ -327,162 +375,124 @@ footer .divider { display: none !important; }
 </style>"""
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;1,400&family=Sofia+Sans:wght@1..1000&family=JetBrains+Mono:wght@400;600&display=swap');
-
 :root {
-  --paper: #F4F0E9; --paper-lift: #FCFAF6; --card: #FFFFFF;
-  --ink: #17140F; --ink-soft: #2B2620; --body-color: #4B443A;
-  --muted: #7C7367; --muted-soft: #A89E90;
-  --faint: #E6DFD2; --faint-soft: #EFEAE0;
-  --accent: #EE5308; --accent-deep: #C24303; --accent-soft: #FBE6D9;
-  --success: #1E8A5A; --error: #D0342C;
-  --ease-spring: cubic-bezier(.34,1.56,.64,1);
-  --ease-swift: cubic-bezier(.2,.7,.2,1);
-  --d1: .18s; --d2: .32s; --d3: .6s;
-  --font-display: 'Newsreader', Georgia, serif;
-  --font-body: 'Sofia Sans', ui-sans-serif, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono-aa: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --page: #F7F7F8; --card: #FFFFFF; --line: #E4E4E7;
+  --text: #18181B; --text-2: #52525B; --muted: #71717A;
+  --accent: #0051C3; --accent-hover: #003D99;
 }
 .dark {
-  --paper: #17140F; --paper-lift: #1E1912; --card: #201B13;
-  --ink: #F4F0E9; --ink-soft: #EFEAE0; --body-color: #C9C0B2;
-  --muted: #A89E90; --muted-soft: #6E6455;
-  --faint: #332D23; --faint-soft: #2A2519;
-  --accent-soft: #3A2313; --accent-deep: #FF8A4D;
+  --page: #0E0E10; --card: #18181B; --line: #2E2E33;
+  --text: #F4F4F5; --text-2: #A1A1AA; --muted: #A1A1AA;
+  --accent: #4C9AFF; --accent-hover: #79B4FF;
 }
 
-/* Map Gradio's variables onto the tokens so every built-in component follows
+/* Map Gradio's variables onto the tokens so built-in components follow
    light/dark without per-component rules. */
 body, .gradio-container {
-  background: var(--paper) !important;
-  color: var(--body-color);
-  font-family: var(--font-body);
-  font-size: 16.5px;
-  line-height: 1.6;
-  font-weight: 450;
-  --body-background-fill: var(--paper);
+  background: var(--page) !important;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.5;
+  --body-background-fill: var(--page);
   --background-fill-primary: var(--card);
-  --background-fill-secondary: var(--paper-lift);
+  --background-fill-secondary: var(--page);
   --block-background-fill: var(--card);
-  --block-border-color: var(--faint);
+  --block-border-color: var(--line);
   --block-border-width: 1px;
-  --block-radius: 4px;
+  --block-radius: 8px;
   --block-shadow: none;
-  --block-label-text-color: var(--muted);
+  --block-label-text-color: var(--text-2);
   --block-label-background-fill: transparent;
-  --block-title-text-color: var(--ink-soft);
-  --body-text-color: var(--body-color);
+  --block-title-text-color: var(--text);
+  --body-text-color: var(--text-2);
   --body-text-color-subdued: var(--muted);
-  --border-color-primary: var(--faint);
-  --input-background-fill: var(--paper-lift);
-  --input-border-color: var(--faint);
-  --input-radius: 8px;
+  --border-color-primary: var(--line);
+  --input-background-fill: var(--card);
+  --input-border-color: var(--line);
+  --input-radius: 6px;
   --input-shadow: none;
   --input-shadow-focus: none;
-  --button-large-radius: 999px;
-  --button-medium-radius: 999px;
-  --button-small-radius: 999px;
+  --button-large-radius: 6px;
+  --button-medium-radius: 6px;
+  --button-small-radius: 6px;
   --button-shadow: none;
   --button-primary-background-fill: var(--accent);
-  --button-primary-background-fill-hover: var(--accent-deep);
-  --button-primary-text-color: #fff;
+  --button-primary-background-fill-hover: var(--accent-hover);
   --button-primary-border-color: var(--accent);
   --panel-background-fill: var(--card);
-  --panel-border-color: var(--faint);
+  --panel-border-color: var(--line);
+  --table-border-color: var(--line);
+  --table-even-background-fill: var(--card);
+  --table-odd-background-fill: var(--card);
+  --table-text-color: var(--text);
+  --table-row-focus: var(--page);
   --shadow-drop: none;
   --shadow-drop-lg: none;
   --layout-gap: 16px;
 }
 .gradio-container {
-  max-width: 1160px !important;
+  max-width: 1120px !important;
   margin: 0 auto !important;
-  padding: 24px 16px 48px !important;
+  padding: 24px 16px 40px !important;
   box-sizing: border-box;
 }
 .gradio-container, .gradio-container * { min-width: 0; }
 html, body { overflow-x: hidden; }
+.gradio-container .main, .aa-shell, .aa-card, .aa-results, .aa-verdict {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.aa-results { width: 100%; }
+.aa-card, .aa-results, .aa-verdict, .aa-header { overflow-wrap: anywhere; }
 
-/* Header */
-.aa-header { text-align: left; margin: 8px 0 8px; }
-.aa-eyebrow {
-  font-family: var(--font-mono-aa);
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0 0 12px 0;
+/* Header: a plain top bar */
+.aa-header { margin: 0 0 8px; }
+.aa-bar { display: flex; align-items: center; gap: 10px; }
+.aa-name { font-size: 18px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.aa-tag {
+  font-size: 12px; line-height: 1; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
 }
-.aa-eyebrow::before {
-  content: "";
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-}
-.aa-title {
-  font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  font-size: clamp(2.1rem, 6vw, 3.6rem);
-  line-height: 1.05;
-  color: var(--ink);
-  margin: 0 0 14px 0;
-  text-wrap: balance;
-}
-.aa-title em { font-style: italic; font-weight: 400; color: var(--accent); }
-.aa-subtitle {
-  font-size: 16.5px; line-height: 1.6; color: var(--muted);
-  max-width: 62ch; margin: 0 0 8px 0;
-}
+.aa-lede { margin: 8px 0 0; font-size: 14px; color: var(--text-2); max-width: 70ch; }
 
-/* Cards and frames */
+/* Cards */
 .aa-card, .aa-results {
   background: var(--card);
-  border: 1px solid var(--faint);
-  border-radius: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   padding: 16px !important;
-  box-shadow: none;
   gap: 16px;
 }
 .aa-card .block, .aa-results .block { box-shadow: none; }
 .aa-card .block.padded { background: transparent; }
-.aa-card .image-container, .aa-card [data-testid="image"],
-.aa-results [data-testid="image"], .aa-results .image-container,
-.aa-card .image-frame, .aa-results .image-frame {
-  border-radius: 24px;
-  overflow: hidden;
-}
 .aa-card .block:has([data-testid="image"]), .aa-results .block:has([data-testid="image"]) {
-  border-radius: 24px;
+  border-radius: 6px;
   overflow: hidden;
 }
-input, textarea, select { border-radius: 8px !important; }
 label > span, .gradio-container label span[data-testid="block-info"] {
-  font-weight: 580;
+  font-weight: 500;
+  color: var(--text);
 }
 
 /* Image label badges: solid chip so they stay readable over any photo */
 .gradio-container [data-testid="block-label"] {
   background: var(--card) !important;
-  border: 1px solid var(--faint) !important;
-  border-radius: 8px !important;
-  color: var(--body-color) !important;
-  font-weight: 560;
-  font-size: var(--block-label-text-size, 0.85em);
+  border: 1px solid var(--line) !important;
+  border-radius: 4px !important;
+  color: var(--text) !important;
+  font-weight: 500;
+  font-size: 12px;
   top: 10px !important;
   left: 10px !important;
   z-index: 5;
 }
-.gradio-container [data-testid="block-label"] * { color: var(--body-color) !important; }
+.gradio-container [data-testid="block-label"] * { color: var(--text) !important; }
 
 /* Sensitivity block: flat, hairline-separated, no card fill */
 .gradio-container .aa-sens {
   background: transparent !important;
   border: none !important;
-  border-top: 1px solid var(--faint) !important;
+  border-top: 1px solid var(--line) !important;
   box-shadow: none !important;
   padding-top: 14px;
   margin-top: 6px;
@@ -495,51 +505,48 @@ label > span, .gradio-container label span[data-testid="block-info"] {
   box-shadow: none !important;
 }
 
-/* Sensitivity radio as pill segments */
-.aa-sens .wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Sensitivity radio as a two-segment control */
+.aa-sens .wrap { display: inline-flex; flex-wrap: nowrap; gap: 0; }
 .aa-sens label {
-  border-radius: 999px !important;
-  border: 1px solid var(--faint) !important;
-  background: var(--paper-lift) !important;
-  padding: 6px 16px !important;
-  font-weight: 580;
-  color: var(--body-color);
+  border: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: var(--page) !important;
+  padding: 6px 14px !important;
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-2);
   cursor: pointer;
-  transition: background var(--d1) var(--ease-swift), border-color var(--d1) var(--ease-swift),
-    color var(--d1) var(--ease-swift), transform var(--d1) var(--ease-spring);
+  margin: 0;
 }
-.aa-sens label:hover { border-color: var(--muted-soft) !important; }
-.aa-sens label:active { transform: scale(.97); }
+.aa-sens label + label { margin-left: -1px; }
+.aa-sens label:first-child { border-radius: 6px 0 0 6px !important; }
+.aa-sens label:last-child { border-radius: 0 6px 6px 0 !important; }
 .aa-sens label input[type="radio"] {
   position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
 }
 .aa-sens label.selected, .aa-sens label:has(input:checked) {
-  background: var(--ink) !important;
-  border-color: var(--ink) !important;
-  color: var(--paper) !important;
+  background: var(--card) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  position: relative;
+  z-index: 1;
 }
 .aa-sens label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Assess button */
-.aa-assess, .aa-assess button {
-  border-radius: 999px !important;
-  font-weight: 600;
-  width: 100%;
-}
+.aa-assess, .aa-assess button { width: 100%; }
 button.aa-assess {
   background: var(--accent) !important;
-  border-color: var(--accent) !important;
-  color: #fff !important;
-  padding: 12px 24px;
-  transition: transform var(--d2) var(--ease-spring), box-shadow var(--d2) var(--ease-swift),
-    background var(--d1) var(--ease-swift);
+  border: 1px solid var(--accent) !important;
+  border-radius: 6px !important;
+  font-weight: 500;
+  padding: 10px 16px;
 }
-button.aa-assess:hover {
-  background: var(--accent-deep) !important;
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(238, 83, 8, .28);
-}
-button.aa-assess:active { transform: scale(.97); box-shadow: none; }
+button.aa-assess:hover { background: var(--accent-hover) !important; }
+
+/* Status line shown while the pipeline runs */
+.aa-status { font-size: 14px; color: var(--text-2); }
+.aa-status p { margin: 0; }
 
 /* Layout: stack on mobile, side by side from 900px */
 .aa-shell { flex-direction: column !important; gap: 16px; }
@@ -556,77 +563,57 @@ button.aa-assess:active { transform: scale(.97); box-shadow: none; }
   .aa-results .block:has([data-testid="image"]) { padding: 0 !important; }
 }
 
-/* Results reveal */
-.aa-results { animation: aa-fade-up var(--d3) var(--ease-swift) both; }
-@keyframes aa-fade-up {
-  from { opacity: 0; transform: translateY(16px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* Verdict card: square, 4px stripe in the verdict colour */
+/* Triage panel */
 .aa-verdict {
   background: var(--card);
-  border: 1px solid var(--faint);
-  border-left: 4px solid var(--verdict);
-  border-radius: 0;
-  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
 }
-.aa-verdict .aa-eyebrow { margin-bottom: 8px; }
 .aa-verdict-label {
-  font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  font-size: 1.9rem;
-  line-height: 1.15;
-  color: var(--verdict);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 600; color: var(--text);
 }
-.aa-verdict-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.aa-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 14px; font-weight: 580;
-  padding: 3px 12px 3px 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--chip) 16%, var(--card));
-  color: var(--ink-soft);
+.aa-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--verdict); flex: none; }
+.dark .aa-dot { background: var(--verdict-dark); }
+.aa-verdict-meta { margin-top: 6px; font-size: 14px; color: var(--text-2); }
+.aa-verdict-note {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px; line-height: 1.5; color: var(--muted);
 }
-.aa-chip-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--chip); flex: none; }
-.aa-chip-muted {
-  background: transparent; border: 1px dashed var(--faint);
-  color: var(--muted); font-weight: 450;
+
+/* Instances table */
+.aa-h { margin: 4px 0 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.aa-table {
+  max-width: 100%;
+  overflow-x: auto;
 }
-.aa-verdict-meta {
-  font-family: var(--font-mono-aa);
-  font-size: 13px;
-  color: var(--body-color);
+.aa-table, .aa-table * {
+  font-family: var(--font);
   font-variant-numeric: tabular-nums;
 }
-.aa-verdict-note {
-  margin-top: 12px; padding-top: 10px;
-  border-top: 1px solid var(--faint-soft);
-  font-size: 13.5px; line-height: 1.5; color: var(--muted);
+.aa-table table { font-size: 14px; }
+.aa-table th {
+  font-weight: 500;
+  text-transform: none;
+  color: var(--text-2);
 }
-
-.aa-notice {
-  margin: 16px 0 0; text-align: center;
-  font-size: 13px; line-height: 1.5; color: var(--muted);
-}
-
-/* Hide JSON mono text overflow on narrow screens */
 .aa-results .json-holder, .aa-results pre { overflow-x: auto; max-width: 100%; }
 
-@media (prefers-reduced-motion: reduce) {
-  .aa-results { animation: none; }
-  *, *::before, *::after { transition-duration: .01ms !important; }
-  button.aa-assess:hover, button.aa-assess:active, .aa-sens label:active { transform: none; }
+.aa-notice {
+  margin: 16px 0 0;
+  font-size: 12.5px; line-height: 1.5; color: var(--muted);
 }
 """
 
 HEADER_HTML = (
     '<div class="aa-header">'
-    '<div class="aa-eyebrow">Claims triage &middot; computer vision</div>'
-    '<h1 class="aa-title">Assess vehicle <em>damage</em> from one photo</h1>'
-    '<p class="aa-subtitle">Locates the damage, names the affected panel, grades '
-    "severity and routes the claim.</p>"
+    '<div class="aa-bar"><span class="aa-name">AutoAssess</span>'
+    '<span class="aa-tag">Research demo</span></div>'
+    '<p class="aa-lede">Upload a photo of a damaged vehicle. AutoAssess segments the '
+    "damage, assigns each instance to a panel, grades severity and suggests how to "
+    "route the claim.</p>"
     "</div>"
 )
 
@@ -652,6 +639,8 @@ SCROLL_TO_RESULTS_JS = """() => {
   }
 }"""
 
+TABLE_HEADERS = ["Damage", "Panel", "Severity", "Confidence"]
+
 with gr.Blocks(title="AutoAssess — Damage Triage", delete_cache=CACHE_SWEEP) as demo:
     gr.HTML(HEADER_HTML)
     with gr.Row(equal_height=False, elem_classes="aa-shell"):
@@ -672,21 +661,48 @@ with gr.Blocks(title="AutoAssess — Damage Triage", delete_cache=CACHE_SWEEP) a
                 visible=SECONDARY_DAMAGE_WEIGHTS is not None,
                 elem_classes="aa-sens",
             )
-            submit_btn = gr.Button("Assess damage →", variant="primary", elem_classes="aa-assess")
+            submit_btn = gr.Button("Assess damage", variant="primary", elem_classes="aa-assess")
+            status_output = gr.Markdown(visible=False, elem_classes="aa-status")
         with gr.Column(min_width=0, visible=False, elem_classes="aa-results") as results_column:
             overlay_output = gr.Image(type="pil", label="Detected damage and parts")
             triage_output = gr.HTML()
-            with gr.Accordion("Structured result (JSON)", open=False):
+            gr.HTML('<h2 class="aa-h">Instances</h2>')
+            table_output = gr.Dataframe(
+                headers=TABLE_HEADERS,
+                datatype="str",
+                interactive=False,
+                show_row_numbers=False,
+                show_label=False,
+                wrap=True,
+                buttons=[],
+                show_search="none",
+                elem_classes="aa-table",
+            )
+            with gr.Accordion("Raw result", open=False):
                 json_output = gr.JSON(label=None, show_label=False)
     gr.HTML(NOTICE_HTML)
 
     # .upload (not .change): the returned value does not re-fire .upload, so no loop.
     image_input.upload(normalize_upload, inputs=image_input, outputs=image_input)
-    submit_btn.click(
+    # The status line is a separate, always-visible component updated before and after
+    # `assess`: Gradio's built-in progress overlay draws on the output components, and
+    # those sit in the results column, which is hidden until the first result arrives.
+    # show_status is queue=False so it paints at once instead of waiting behind the job.
+    assess_event = submit_btn.click(
+        fn=show_status,
+        inputs=None,
+        outputs=status_output,
+        queue=False,
+        show_progress="hidden",
+    ).then(
         fn=assess,
         inputs=[image_input, sensitivity_input],
-        outputs=[overlay_output, json_output, triage_output, results_column],
-    ).success(
+        outputs=[overlay_output, triage_output, table_output, json_output, results_column],
+        show_progress="hidden",
+    )
+    # .then (not .success) so the status line also clears when assess raises gr.Error.
+    assess_event.then(fn=hide_status, inputs=None, outputs=status_output, queue=False)
+    assess_event.success(
         # Gradio's scroll_to_output only scrolls when the output is fully off-screen; on
         # mobile the results column's top edge is barely visible, so scroll explicitly.
         fn=None,
