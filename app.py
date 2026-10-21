@@ -634,6 +634,10 @@ HEADER_HTML = (
 # plates and must not accumulate on a public server.
 CACHE_SWEEP = (600, 600)
 
+# Gradio 6.22 ignores GRADIO_MAX_FILE_SIZE (page config shows max_file_size null),
+# so read it here and pass it to launch() explicitly.
+MAX_UPLOAD = os.environ.get("GRADIO_MAX_FILE_SIZE", "15mb")
+
 NOTICE_HTML = (
     '<p class="aa-notice">Research demo, non-commercial. Models trained on CarDD, '
     "VehiDE and Carparts-Seg. Uploaded photos are deleted from the server within "
@@ -694,4 +698,10 @@ with gr.Blocks(title="AutoAssess — Damage Triage", delete_cache=CACHE_SWEEP) a
 if __name__ == "__main__":
     # footer_links drops "Built with Gradio" and "Use via API" (whose hidden-on-mobile
     # separator left a stray leading dot) and keeps Settings.
-    demo.launch(theme=THEME, css=CSS, head=HEAD_STYLE, footer_links=["settings"])
+    demo.launch(
+        theme=THEME,
+        css=CSS,
+        head=HEAD_STYLE,
+        footer_links=["settings"],
+        max_file_size=MAX_UPLOAD,
+    )

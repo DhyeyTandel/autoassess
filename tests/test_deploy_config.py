@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -84,3 +85,37 @@ def test_app_shows_notice() -> None:
     assert "deleted" in module.NOTICE_HTML
     assert module.demo.delete_cache == (600, 600)
     assert module.CACHE_SWEEP == (600, 600)
+
+
+def _load_app() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("autoassess_deploy_app", _ROOT / "app.py")
+    assert spec is not None and spec.loader is not None
+    module: ModuleType = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_max_upload_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRADIO_MAX_FILE_SIZE", raising=False)
+    assert _load_app().MAX_UPLOAD == "15mb"
+
+
+def test_max_upload_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GRADIO_MAX_FILE_SIZE", "5mb")
+    assert _load_app().MAX_UPLOAD == "5mb"
+
+
+def test_launch_passes_max_file_size() -> None:
+    tree = ast.parse((_ROOT / "app.py").read_text())
+    launches = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "launch"
+    ]
+    assert len(launches) == 1
+    kw = {k.arg: k.value for k in launches[0].keywords}
+    assert isinstance(kw.get("max_file_size"), ast.Name)
+    assert kw["max_file_size"].id == "MAX_UPLOAD"
