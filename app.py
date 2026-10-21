@@ -606,6 +606,11 @@ button.aa-assess:active { transform: scale(.97); box-shadow: none; }
   font-size: 13.5px; line-height: 1.5; color: var(--muted);
 }
 
+.aa-notice {
+  margin: 16px 0 0; text-align: center;
+  font-size: 13px; line-height: 1.5; color: var(--muted);
+}
+
 /* Hide JSON mono text overflow on narrow screens */
 .aa-results .json-holder, .aa-results pre { overflow-x: auto; max-width: 100%; }
 
@@ -625,6 +630,20 @@ HEADER_HTML = (
     "</div>"
 )
 
+# (sweep every, delete files older than) seconds: uploaded photos can show licence
+# plates and must not accumulate on a public server.
+CACHE_SWEEP = (600, 600)
+
+# Gradio 6.22 ignores GRADIO_MAX_FILE_SIZE (page config shows max_file_size null),
+# so read it here and pass it to launch() explicitly.
+MAX_UPLOAD = os.environ.get("GRADIO_MAX_FILE_SIZE", "15mb")
+
+NOTICE_HTML = (
+    '<p class="aa-notice">Research demo, non-commercial. Models trained on CarDD, '
+    "VehiDE and Carparts-Seg. Uploaded photos are deleted from the server within "
+    "about 20 minutes.</p>"
+)
+
 SCROLL_TO_RESULTS_JS = """() => {
   const el = document.querySelector('.aa-results');
   if (el) {
@@ -633,7 +652,7 @@ SCROLL_TO_RESULTS_JS = """() => {
   }
 }"""
 
-with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
+with gr.Blocks(title="AutoAssess — Damage Triage", delete_cache=CACHE_SWEEP) as demo:
     gr.HTML(HEADER_HTML)
     with gr.Row(equal_height=False, elem_classes="aa-shell"):
         with gr.Column(min_width=0, elem_classes="aa-card aa-input-col"):
@@ -659,6 +678,7 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
             triage_output = gr.HTML()
             with gr.Accordion("Structured result (JSON)", open=False):
                 json_output = gr.JSON(label=None, show_label=False)
+    gr.HTML(NOTICE_HTML)
 
     # .upload (not .change): the returned value does not re-fire .upload, so no loop.
     image_input.upload(normalize_upload, inputs=image_input, outputs=image_input)
@@ -678,4 +698,10 @@ with gr.Blocks(title="AutoAssess — Damage Triage") as demo:
 if __name__ == "__main__":
     # footer_links drops "Built with Gradio" and "Use via API" (whose hidden-on-mobile
     # separator left a stray leading dot) and keeps Settings.
-    demo.launch(theme=THEME, css=CSS, head=HEAD_STYLE, footer_links=["settings"])
+    demo.launch(
+        theme=THEME,
+        css=CSS,
+        head=HEAD_STYLE,
+        footer_links=["settings"],
+        max_file_size=MAX_UPLOAD,
+    )

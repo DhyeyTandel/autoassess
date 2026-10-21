@@ -1,0 +1,12 @@
+services:
+  autoassess:
+    build: .
+    image: autoassess:latest
+    container_name: autoassess
+    ports:
+      - "127.0.0.1:7860:7860"
+    volumes:
+      - "./runs:/app/runs:ro"
+    restart: unless-stopped
+    cpus: 4
+    mem_limit: 3g

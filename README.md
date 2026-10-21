@@ -130,6 +130,31 @@ Key config sections:
 
 ---
 
+## Deploying
+
+The Gradio demo (`app.py`) ships as a CPU-only Docker image (CPU torch wheels,
+non-root user, port 7860).
+
+Weights are not in git and are mounted read-only at `/app/runs`. Place them on
+the host next to `docker-compose.yml`:
+
+```
+runs/yolov8_seg_v1/weights/best.pt   # CarDD damage model
+runs/vehide_seg_v1/weights/best.pt   # VehiDE damage model
+runs/parts_seg_v1/weights/best.pt    # Carparts-Seg parts model
+```
+
+Build and start:
+
+```bash
+docker compose up -d --build
+```
+
+The container is published on `127.0.0.1:7860` only. To expose it, add a
+Cloudflare Tunnel public hostname with service `http://localhost:7860`.
+
+---
+
 ## License
 
 MIT © Dhyey Tandel

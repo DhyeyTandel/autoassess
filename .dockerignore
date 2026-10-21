@@ -1,0 +1,14 @@
+.git
+runs/
+data/
+reports/
+notebooks/
+colab/
+docs/
+tests/
+*.ipynb
+__pycache__
+.venv
+*.zip
+*.pt
+.claude
