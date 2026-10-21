@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 from pycocotools import mask as mask_utils
 
 from autoassess.infer.associate import (
@@ -105,3 +106,29 @@ def test_build_records_emit_part_coverage() -> None:
     assert records[0]["part_coverage"] == 1.0
     assert records[1]["part"] == UNASSIGNED
     assert records[1]["part_coverage"] is None
+
+
+def test_load_yolo_caches_by_weights(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import types
+
+    from autoassess.infer import associate
+
+    built: list[str] = []
+
+    class FakeYOLO:
+        def __init__(self, weights: str) -> None:
+            built.append(weights)
+
+    # Fake module: importing real ultralytics patches PIL.Image.open process-wide
+    # and would break unrelated bad-image tests that run later in the session.
+    fake_mod = types.ModuleType("ultralytics")
+    fake_mod.YOLO = FakeYOLO  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_mod)
+    associate._load_yolo.cache_clear()
+    a1 = associate._load_yolo("a.pt")
+    a2 = associate._load_yolo("a.pt")
+    b = associate._load_yolo("b.pt")
+    assert a1 is a2 and a1 is not b
+    assert built == ["a.pt", "b.pt"]
+    associate._load_yolo.cache_clear()

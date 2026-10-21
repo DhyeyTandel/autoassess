@@ -132,8 +132,18 @@ Key config sections:
 
 ## Deploying
 
-The Gradio demo (`app.py`) ships as a CPU-only Docker image (CPU torch wheels,
-non-root user, port 7860).
+The demo is a React (Vite) frontend in `frontend/` served by a FastAPI backend
+(`autoassess-web`, port 7860). It ships as one CPU-only Docker image: a Node
+stage builds the frontend (`npm ci`, then `npm run build`, which type-checks
+with `tsc -b`), and the Python stage (CPU torch wheels, non-root user) serves
+the API under `/api` and the built static files.
+
+Local development (two terminals):
+
+```bash
+uv run autoassess-web                 # API on :7860 (AUTOASSESS_DEVICE=mps|cpu|0)
+cd frontend && npm install && npm run dev   # Vite dev server, proxies /api to the backend
+```
 
 Weights are not in git and are mounted read-only at `/app/runs`. Place them on
 the host next to `docker-compose.yml`:

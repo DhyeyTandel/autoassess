@@ -1,4 +1,12 @@
 # syntax=docker/dockerfile:1
+FROM node:22-slim AS web
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+# `npm run build` runs `tsc -b` (type check) before the Vite build.
+RUN npm run build
+
 FROM python:3.12-slim
 
 # opencv / ultralytics runtime libs (opencv-python links libGL and glib).
@@ -35,17 +43,18 @@ RUN uv pip install --system --no-cache \
     && python -c "import torch; assert '+cpu' in torch.__version__ and not torch.cuda.is_available(), torch.__version__"
 
 COPY configs/ configs/
-COPY app.py ./
+COPY --from=web /app/frontend/dist /app/frontend/dist
 
 RUN useradd --create-home --uid 1000 app \
     && mkdir -p /tmp/Ultralytics \
     && chown -R app:app /app /tmp/Ultralytics
 USER app
 
-ENV GRADIO_SERVER_NAME=0.0.0.0 \
-    GRADIO_SERVER_PORT=7860 \
+ENV AUTOASSESS_HOST=0.0.0.0 \
+    AUTOASSESS_PORT=7860 \
     AUTOASSESS_DEVICE=cpu \
-    GRADIO_MAX_FILE_SIZE=15mb \
+    AUTOASSESS_STATIC_DIR=/app/frontend/dist \
+    AUTOASSESS_MAX_UPLOAD_MB=15 \
     PYTHONUNBUFFERED=1 \
     YOLO_CONFIG_DIR=/tmp/Ultralytics \
     MPLCONFIGDIR=/tmp/matplotlib
@@ -53,6 +62,6 @@ ENV GRADIO_SERVER_NAME=0.0.0.0 \
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/', timeout=4)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=4)"]
 
-CMD ["python", "app.py"]
+CMD ["autoassess-web"]

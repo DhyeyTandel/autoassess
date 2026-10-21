@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-import ast
-import importlib.util
-import sys
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parent.parent
-NOTICE = (
-    "Research demo, non-commercial. Models trained on CarDD, VehiDE and Carparts-Seg. "
-    "Uploaded photos are deleted from the server within about 20 minutes."
-)
 
 
 @pytest.fixture(scope="module")
@@ -58,11 +50,35 @@ def test_dockerfile_non_root_user(dockerfile: str) -> None:
 
 
 def test_dockerfile_env_and_healthcheck(dockerfile: str) -> None:
-    assert "GRADIO_SERVER_NAME=0.0.0.0" in dockerfile
-    assert "GRADIO_SERVER_PORT=7860" in dockerfile
-    assert "AUTOASSESS_DEVICE=cpu" in dockerfile
+    for env in (
+        "AUTOASSESS_HOST=0.0.0.0",
+        "AUTOASSESS_PORT=7860",
+        "AUTOASSESS_DEVICE=cpu",
+        "AUTOASSESS_STATIC_DIR=/app/frontend/dist",
+        "AUTOASSESS_MAX_UPLOAD_MB=15",
+    ):
+        assert env in dockerfile
+    assert "GRADIO" not in dockerfile.upper()
     assert "HEALTHCHECK" in dockerfile
     assert "urllib" in dockerfile
+    assert "http://127.0.0.1:7860/api/health" in dockerfile
+    assert 'CMD ["autoassess-web"]' in dockerfile
+
+
+def test_dockerfile_has_both_stages(dockerfile: str) -> None:
+    froms = [ln for ln in dockerfile.splitlines() if ln.startswith("FROM ")]
+    assert froms[0] == "FROM node:22-slim AS web"
+    assert froms[-1] == "FROM python:3.12-slim"
+    assert "npm ci" in dockerfile and "npm run build" in dockerfile
+
+
+def test_dockerfile_copies_dist_into_final_stage(dockerfile: str) -> None:
+    final = dockerfile.split("FROM python:3.12-slim", 1)[1]
+    assert "COPY --from=web /app/frontend/dist /app/frontend/dist" in final
+
+
+def test_dockerfile_keeps_cpu_assertion(dockerfile: str) -> None:
+    assert "'+cpu' in torch.__version__" in dockerfile
 
 
 def test_dockerignore_excludes_heavy_dirs() -> None:
@@ -73,49 +89,10 @@ def test_dockerignore_excludes_heavy_dirs() -> None:
     assert {"runs", "data", ".git"} <= lines
 
 
-def test_app_shows_notice() -> None:
-    spec = importlib.util.spec_from_file_location("autoassess_deploy_app", _ROOT / "app.py")
-    assert spec is not None and spec.loader is not None
-    module: ModuleType = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    assert NOTICE in module.NOTICE_HTML
-    values = [str(getattr(b, "value", "")) for b in module.demo.blocks.values()]
-    assert any(NOTICE in v for v in values)
-    assert "deleted" in module.NOTICE_HTML
-    assert module.demo.delete_cache == (600, 600)
-    assert module.CACHE_SWEEP == (600, 600)
-
-
-def _load_app() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("autoassess_deploy_app", _ROOT / "app.py")
-    assert spec is not None and spec.loader is not None
-    module: ModuleType = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_max_upload_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GRADIO_MAX_FILE_SIZE", raising=False)
-    assert _load_app().MAX_UPLOAD == "15mb"
-
-
-def test_max_upload_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GRADIO_MAX_FILE_SIZE", "5mb")
-    assert _load_app().MAX_UPLOAD == "5mb"
-
-
-def test_launch_passes_max_file_size() -> None:
-    tree = ast.parse((_ROOT / "app.py").read_text())
-    launches = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Attribute)
-        and n.func.attr == "launch"
-    ]
-    assert len(launches) == 1
-    kw = {k.arg: k.value for k in launches[0].keywords}
-    assert isinstance(kw.get("max_file_size"), ast.Name)
-    assert kw["max_file_size"].id == "MAX_UPLOAD"
+def test_dockerignore_keeps_frontend_sources() -> None:
+    lines = {
+        ln.strip().rstrip("/")
+        for ln in (_ROOT / ".dockerignore").read_text().splitlines()
+    }
+    assert "frontend" not in lines and "frontend/*" not in lines
+    assert {"frontend/node_modules", "frontend/dist"} <= lines
