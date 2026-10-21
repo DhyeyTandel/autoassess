@@ -27,7 +27,7 @@ data/interim/
 data/processed/
 
 # --- Experiment runs (weights, logs) ---
-runs/
+runs/*
 # Keep the runs/ directory itself
 !runs/.gitkeep
 
