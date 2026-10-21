@@ -80,3 +80,7 @@ Desktop.ini
 kaggle.json
 KAGGLE_JSON.json
 *.kaggle.json
+
+# --- Frontend ---
+frontend/node_modules/
+frontend/dist/
