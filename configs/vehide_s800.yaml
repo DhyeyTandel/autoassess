@@ -1,0 +1,45 @@
+# =============================================================================
+# configs/vehide_s800.yaml: VehiDE re-encoded exactly like the unified dataset
+# (long side <= 800 px, JPEG quality 85), in VehiDE's ORIGINAL class order.
+#
+# Built with `autoassess-unify` (single source, identity class map) only so that
+# the VehiDE-only baseline model can be re-scored on the same pixels the joint
+# 9-class model is tested on. The unified dataset's test_vehide split uses the
+# unified class order, which the VehiDE baseline's class indices don't match.
+# Only images/test_vehide is used for evaluation.
+#
+#   autoassess-unify --config configs/base.yaml --unified-config configs/vehide_s800.yaml \
+#       --max-side 800 --jpeg-quality 85
+# =============================================================================
+
+path: ../data/processed/vehide_s800     # relative to this file's location
+train: train.txt
+val: images/val
+test: images/test_vehide
+
+names:
+  0: scratch
+  1: dent
+  2: torn
+  3: broken_lamp
+  4: missing_part
+  5: punctured
+  6: shattered_glass
+
+sources:
+  vehide:
+    config: configs/vehide.yaml
+    class_map:
+      scratch: scratch
+      dent: dent
+      torn: torn
+      broken_lamp: broken_lamp
+      missing_part: missing_part
+      punctured: punctured
+      shattered_glass: shattered_glass
+
+oversample:
+  vehide: 1
+
+labelled_classes:
+  vehide: [scratch, dent, torn, broken_lamp, missing_part, punctured, shattered_glass]
