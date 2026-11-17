@@ -112,13 +112,35 @@ Key config sections:
 
 ## Results
 
-> _To be filled in after experiments._
+All numbers are measured on the held-out test split and copied from
+[`reports/results.md`](reports/results.md), which is generated from
+`runs/*/metrics.json` by `scripts/generate_results_md.py`. That file also has
+the per-class tables, failure-case analysis and figure paths.
 
-| Model | mAP@50 | mAP@50-95 | Inf. time (ms/img) |
-|-------|--------|-----------|-------------------|
-| YOLOv8n-seg | — | — | — |
-| YOLOv8s-seg | — | — | — |
-| Mask R-CNN  | — | — | — |
+| Task (dataset) | Model | Box mAP@0.5 | Mask mAP@0.5 | Mask mAP@0.5:0.95 | Latency, mean / p95 (ms/img) |
+|---|---|---|---|---|---|
+| Damage, 6 classes (CarDD) | YOLOv8n-seg | 0.6407 | 0.6203 | 0.4012 | 30.4 / 36.0 |
+| Panels, 6 classes (Carparts-Seg) | YOLOv8n-seg | 0.9346 | 0.9342 | 0.7675 | 16.7 / 22.3 |
+| Damage, 7 classes (VehiDE) | YOLOv8s-seg | 0.4712 | 0.4283 | 0.2344 | 29.5 / 41.8 |
+| Damage (CarDD), baseline | Mask R-CNN | not trained yet | | | |
+
+Things to know when reading these:
+
+- **Per-class spread on CarDD is wide.** Mask AP@0.5 ranges from 0.90 on
+  `tire flat` and `glass shatter` down to 0.18 on `crack`. Thin, low-contrast
+  damage (`crack`, `scratch`, `dent`) is where the model misses.
+- **Near-duplicate check.** A perceptual-hash audit
+  ([`reports/split_audit.md`](reports/split_audit.md)) flagged visually similar
+  train/test pairs. Re-scoring with those test images removed barely moves the
+  numbers: panels mask mAP@0.5 0.9342 to 0.9354 (12 images removed), VehiDE
+  0.4283 to 0.4272 (45 removed).
+- **VehiDE run stopped at epoch 48 of 50.** Training crashed on a Colab runtime
+  reset; the reported weights are from epoch 48.
+- **Severity grading is not validated against real labels.** The ResNet-18
+  severity classifier reaches 0.78 validation agreement with this project's own
+  hand-written severity heuristic. That is agreement with a rule, not
+  real-world grading accuracy.
+- **Mask R-CNN baseline is pending.** No comparison numbers exist yet.
 
 ---
 
