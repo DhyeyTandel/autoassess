@@ -11,7 +11,7 @@ AutoAssess takes a photograph of a damaged vehicle and produces:
 1. **Damage localisation** — bounding boxes and instance segmentation masks over each damaged region.
 2. **Severity grading** — a per-region severity label (minor / moderate / severe).
 
-The primary model is **YOLOv8-seg** (nano or small variant); Mask R-CNN is included as a comparison baseline.
+The primary model is **YOLOv8-seg** (nano or small variant); a Mask R-CNN comparison baseline has a training script (`src/autoassess/train/train_maskrcnn.py`) but has not been trained yet.
 
 ---
 
